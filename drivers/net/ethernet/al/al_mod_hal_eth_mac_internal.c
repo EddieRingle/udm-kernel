@@ -244,10 +244,18 @@ int al_mod_eth_mac_v1_v3_mac_link_config(struct al_mod_eth_mac_obj *obj,
 	switch (obj->mac_mode) {
 	case AL_ETH_MAC_MODE_SGMII:
 	case AL_ETH_MAC_MODE_RGMII:
+		al_mod_dbg("[SFP] MACv3 1G %s an-%s %dMbps FD-%d\n",
+			force_1000_base_x ? "Base-X" : "SGMII",
+			an_enable ? "On" : "Off",
+			speed, full_duplex);
 		link_config_1g_mac(obj, force_1000_base_x, an_enable,
 					      speed, full_duplex);
 		break;
 	case AL_ETH_MAC_MODE_SGMII_2_5G:
+		al_mod_dbg("[SFP] MACv3 2.5G %s an-%s %dMbps FD-%d\n",
+			force_1000_base_x ? "Base-X" : "SGMII",
+			an_enable ? "On" : "Off",
+			speed, full_duplex);
 		link_config_10g_mac(obj, force_1000_base_x, an_enable,
 					       speed, full_duplex);
 		break;

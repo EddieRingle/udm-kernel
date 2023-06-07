@@ -44,6 +44,9 @@ int al_mod_eth_lm_retimer_handle_init(
 	case AL_ETH_LM_RETIMER_TYPE_DS_25:
 		ret = al_mod_eth_lm_retimer_ds25_handle_init(handle, params);
 		break;
+	case AL_ETH_LM_RETIMER_TYPE_DS_125:
+		ret = al_mod_eth_lm_retimer_ds125_handle_init(handle, params);
+		break;
 	default:
 		al_mod_assert(AL_FALSE);
 		break;

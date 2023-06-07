@@ -5,7 +5,7 @@
 #ifndef _RTL8370_H_
 #define _RTL8370_H_
 
-#include "ubnt_acl.h"
+#include <linux/ubnt_acl.h>
 #include "rtl83xx_api/acl.h"
 
 /**
@@ -203,6 +203,14 @@ struct rtl8370_vlan_entry {
 	bool ivl_enabled;
 };
 
+typedef enum {
+	RTL_PORT_MIRRORING_NONE = 0x00,
+	RTL_PORT_MIRRORING_MONITOR,
+	RTL_PORT_MIRRORING_RX,
+	RTL_PORT_MIRRORING_TX,
+	RTL_PORT_MIRRORING_FULL
+} rtl8370_port_mirroring_t;
+
 struct rtl8370_priv {
 	struct mii_bus *mii_bus;
 	struct switch_dev swdev;
@@ -225,6 +233,7 @@ struct rtl8370_priv {
 	const struct rtl8370_port_mapping *port_map;
 	int reset_pin;
 	int igmp_snooping;
+	rtl8370_port_mirroring_t port_mirroring[RTL8370_PORT_MAX_PHY];
 };
 
 #define RTL8370_INTERPRET_API_ERRORS

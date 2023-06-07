@@ -55,6 +55,10 @@
 #include "al_hal_iofic_regs.h"
 #endif
 
+#if defined (CONFIG_UBNT_HDD_PWRCTL) || defined (CONFIG_UBNT_HDD_PWRCTL_V2)
+#include <linux/power/ubnt-hdd-pwrctl.h>
+#endif
+
 #define al_ahci_iofic_base(base)	((base) + 0x2000)
 #define AL_AHCI_SPEED_AN_TRIES		(16)
 
@@ -1351,6 +1355,13 @@ ssize_t al_ahci_transmit_led_message(struct ata_port *ap, u32 state,
 
 	if (state & EM_MSG_LED_VALUE_ON)
 		led_val = 1;
+
+#if defined (CONFIG_UBNT_HDD_PWRCTL) || defined (CONFIG_UBNT_HDD_PWRCTL_V2)
+	if (hpriv->fault_led_gpio[ap->port_no] != 0) {
+		if (ubnt_hdd_fault_led_enabled(hpriv->fault_led_gpio[ap->port_no]))
+			led_val = 0;
+	}
+#endif
 
 	gpio_set_value(hpriv->led_gpio[ap->port_no], led_val);
 

@@ -108,6 +108,8 @@ extern ret_t rtl8367c_setAsicLedGroupEnable(rtk_uint32 group, rtk_uint32 portmas
 extern ret_t rtl8367c_getAsicLedGroupEnable(rtk_uint32 group, rtk_uint32 *portmask);
 extern ret_t rtl8367c_setAsicLedOperationMode(rtk_uint32 mode);
 extern ret_t rtl8367c_getAsicLedOperationMode(rtk_uint32 *mode);
+extern ret_t rtl8367c_setAsicLedSerialShiftSequenceMask(rtk_uint32 mask);
+extern ret_t rtl8367c_getAsicLedSerialShiftSequenceMask(rtk_uint32 *mask);
 extern ret_t rtl8367c_setAsicLedSerialModeConfig(rtk_uint32 active, rtk_uint32 serimode);
 extern ret_t rtl8367c_getAsicLedSerialModeConfig(rtk_uint32 *active, rtk_uint32 *serimode);
 extern ret_t rtl8367c_setAsicLedOutputEnable(rtk_uint32 enabled);

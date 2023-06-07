@@ -2290,7 +2290,7 @@ enum al_mod_eth_retimer_type {
 	AL_ETH_RETIMER_BR_210			= 0,
 	AL_ETH_RETIMER_BR_410			= 1,
 	AL_ETH_RETIMER_DS_25			= 2,
-
+	AL_ETH_RETIMER_DS_125           = 3,
 	AL_ETH_RETIMER_TYPE_MAX			= 4,
 };
 

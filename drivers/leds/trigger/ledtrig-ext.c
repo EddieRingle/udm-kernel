@@ -21,7 +21,7 @@
 #include <linux/slab.h>
 #include <linux/leds.h>
 
-#define MAX_EXT_TRIGGERS       10
+#define MAX_EXT_TRIGGERS       CONFIG_LEDS_TRIGGER_EXTERNAL_MAX
 #define MAX_NAME_LEN           16
 
 #define EXT_NAME_PATTERN       "external%d"

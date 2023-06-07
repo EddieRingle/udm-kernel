@@ -257,10 +257,29 @@ static int pca953x_read_regs_16(struct pca953x_chip *chip, int reg, u8 *val)
 {
 	int ret;
 
+/*
+ *  Reading word_data from PCA9575 doesn't work correctly on AL324 platform.
+ *  The high byte and low byte received from PCA9575 are always the same.
+ *  Here, we read byte by byte instead of word read to workaround it.
+ */
+#ifdef CONFIG_GPIO_PCA953X_READ_BYB
+	ret = i2c_smbus_read_byte_data(chip->client, reg << 1);
+	if (ret < 0)
+		return ret;
+	val[0] = ret;
+
+	ret = i2c_smbus_read_byte_data(chip->client, (reg << 1) + 1);
+	if (ret < 0)
+		return ret;
+	val[1] = ret;
+
+	return 0;
+#else /* CONFIG_GPIO_PCA953X_READ_BYB */
 	ret = i2c_smbus_read_word_data(chip->client, reg << 1);
 	put_unaligned(ret, (u16 *)val);
 
 	return ret;
+#endif
 }
 
 static int pca957x_read_regs_16(struct pca953x_chip *chip, int reg, u8 *val)

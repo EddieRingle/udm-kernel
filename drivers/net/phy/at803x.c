@@ -34,7 +34,7 @@
 
 #define AT803X_SMART_SPEED			0x14
 #define AT803X_LED_CONTROL			0x18
-#define AT803X_LED_OVERRIDE			0x19
+#define AT803X_MANUAL_LED_OVERRIDE		0x19
 #define AT803X_DEVICE_ADDR			0x03
 #define AT803X_LOC_MAC_ADDR_0_15_OFFSET		0x804C
 #define AT803X_LOC_MAC_ADDR_16_31_OFFSET	0x804B
@@ -69,6 +69,8 @@
 #define AT8033_EEE_ADVERT		0x3C
 #endif
 
+#define LED_LINK10_100_ON	(BIT(7) | BIT(6))
+
 #define ATH8030_PHY_ID 0x004dd076
 #define ATH8031_PHY_ID 0x004dd074
 #define ATH8035_PHY_ID 0x004dd072
@@ -80,6 +82,9 @@ MODULE_LICENSE("GPL");
 
 struct at803x_priv {
 	bool phy_reset:1;
+	bool led_10_on;
+	bool prev_led_10_on;
+	u16 manual_led_override;
 };
 
 struct at803x_context {
@@ -259,6 +264,7 @@ static int at803x_probe(struct phy_device *phydev)
 static int at803x_config_init(struct phy_device *phydev)
 {
 	int ret;
+	struct at803x_priv *priv = phydev->priv;
 
 	ret = genphy_config_init(phydev);
 	if (ret < 0)
@@ -278,11 +284,6 @@ static int at803x_config_init(struct phy_device *phydev)
 			return ret;
 	}
 
-	/* invert LED_ACT -> LED_ACT = 0 */
-	ret = phy_write(phydev, AT803X_LED_OVERRIDE, 0x0200);
-	if (ret)
-		return ret;
-
 #ifdef CONFIG_AT8033_SEL_1P8
 	ret = phy_write(phydev, AT803X_DEBUG_ADDR,
 			AT8033_DEBUG_SEL_1P8);
@@ -293,6 +294,7 @@ static int at803x_config_init(struct phy_device *phydev)
 	if (ret)
 		return ret;
 #endif
+
 #ifdef CONFIG_AR8033_DISABLE_EEE
 	ret = phy_write(phydev, AT803X_MMD_ACCESS_CONTROL, 0x7);
 	ret = phy_write(phydev, AT803X_MMD_ACCESS_CONTROL_DATA, AT8033_EEE_ADVERT);
@@ -302,6 +304,21 @@ static int at803x_config_init(struct phy_device *phydev)
 	phy_write(phydev, AT803X_MMD_ACCESS_CONTROL_DATA, 0x0);
 	phy_read(phydev, AT803X_MMD_ACCESS_CONTROL_DATA);
 #endif
+
+	if (phydev->drv->phy_id == ATH8031_PHY_ID) {
+		priv->led_10_on = false;
+		priv->prev_led_10_on = false;
+		priv->manual_led_override = phy_read(phydev, AT803X_MANUAL_LED_OVERRIDE);
+		priv->manual_led_override &= ~LED_LINK10_100_ON;
+		phy_write(phydev, AT803X_MANUAL_LED_OVERRIDE, priv->manual_led_override);
+	}
+
+	/* enable LED_ACT control bit by default */
+	ret = phy_write(phydev, AT803X_LED_CONTROL,
+			(phy_read(phydev, AT803X_LED_CONTROL) | BIT(2)));
+	if (ret)
+		return ret;
+
 	return 0;
 }
 
@@ -340,6 +357,24 @@ static void at803x_link_change_notify(struct phy_device *phydev)
 {
 	struct at803x_priv *priv = phydev->priv;
 
+	if (phydev->drv->phy_id == ATH8031_PHY_ID) {
+		if (priv->led_10_on && (phydev->state == PHY_NOLINK ||
+			phydev->state == PHY_DOWN || phydev->state == PHY_PENDING))
+			priv->led_10_on = false;
+		else if (phydev->state == PHY_RUNNING)
+			priv->led_10_on = (phydev->speed == 10) ?  true : false;
+
+		if (priv->led_10_on != priv->prev_led_10_on) {
+			priv->prev_led_10_on = priv->led_10_on;
+			if (priv->led_10_on)
+				priv->manual_led_override |= LED_LINK10_100_ON;
+			else
+				priv->manual_led_override &= ~LED_LINK10_100_ON;
+
+			phy_write(phydev, AT803X_MANUAL_LED_OVERRIDE, priv->manual_led_override);
+			phydev_dbg(phydev, "%s: set LED_LINK10_100 %s\n", __func__, priv->led_10_on ? "on" : "normal");
+		}
+	}
 	/*
 	 * Conduct a hardware reset for AT8030 every time a link loss is
 	 * signalled. This is necessary to circumvent a hardware bug that
@@ -409,8 +444,8 @@ static struct phy_driver at803x_driver[] = {
 	.config_init		= at803x_config_init,
 	.set_wol		= at803x_set_wol,
 	.get_wol		= at803x_get_wol,
-	.suspend		= at803x_suspend,
-	.resume			= at803x_resume,
+	// .suspend		= at803x_suspend,
+	// .resume			= at803x_resume,
 	.features		= PHY_GBIT_FEATURES,
 	.flags			= PHY_HAS_INTERRUPT,
 	.ack_interrupt		= at803x_ack_interrupt,

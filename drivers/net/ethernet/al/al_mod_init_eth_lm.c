@@ -109,8 +109,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #define SFP_SFF8472_LENGTH_FIELD_4_COPPER (4)
 
-#define UF_SFP_POLLING_TIMEOUT 3500
-
 enum al_mod_eth_lm_step_detection_state {
 	LM_STEP_DETECTION_INIT,
 	LM_STEP_DETECTION_RETIMER_RX_ADAPT_WAIT,
@@ -421,6 +419,7 @@ static int al_mod_eth_sfp_detect(struct al_mod_eth_lm_context *lm_context,
 	unsigned long sfp_quirk_flags = 0;
 	const struct al_mod_sfp_quirk_entry *sfp_quirk = NULL;
 	unsigned sfp_t_start_ms;
+	int base_10G_RJ45_detected = 0;
 
 	al_mod_assert(lm_context->i2c_read_data);
 
@@ -549,9 +548,7 @@ static int al_mod_eth_sfp_detect(struct al_mod_eth_lm_context *lm_context,
 		    ((lm_context->max_speed == AL_ETH_LM_MAX_SPEED_25G) ||
 		     (lm_context->max_speed == AL_ETH_LM_MAX_SPEED_MAX)))
 			*new_mode = AL_ETH_LM_MODE_25G;
-		else if ((id.base.br_nominal >= SFP_MIN_SIGNAL_RATE_10G) &&
-			 ((lm_context->max_speed == AL_ETH_LM_MAX_SPEED_10G) ||
-			  (lm_context->max_speed == AL_ETH_LM_MAX_SPEED_MAX)))
+		else if (id.base.br_nominal >= SFP_MIN_SIGNAL_RATE_10G)
 			*new_mode = AL_ETH_LM_MODE_10G_DA;
 		else
 			*new_mode = AL_ETH_LM_MODE_1G;
@@ -564,64 +561,11 @@ static int al_mod_eth_sfp_detect(struct al_mod_eth_lm_context *lm_context,
 		}
 		/* for active direct attached need to use len 0 in the retimer configuration */
 		lm_context->da_len = (id.base.sfp_ct_passive) ? id.base.link_len[SFP_SFF8472_LENGTH_FIELD_4_COPPER] : 0;
-	} else if (lm_context->sfp_probe_10g && al_mod_eth_sfp_is_10GBaseT(&id)) {
-		struct al_mod_eth_mac_obj *mac_obj = &lm_context->adapter->mac_obj;
-		struct al_mod_eth_link_status status;
-		unsigned long diff;
-
-		/* When we connect 10G module to 1G interface, bit-15 gets
-		 * cleared (most likely bit indicated established 10G-KR link).
-		 * It's set when cable's dangling or connected to 10G-KR medium.
-		 * Note: bit-15 logic stolen from: link_status_get().
-		 */
-		switch (lm_context->mode) {
-		case AL_ETH_LM_MODE_10G_OPTIC:
-			*new_mode = AL_ETH_LM_MODE_10G_OPTIC;
-
-			if (!mac_obj->check_10g_base_kr)
-				break; // not supported
-
-			if (mac_obj->check_10g_base_kr(mac_obj)) {
-				lm_context->RJ45_10G_jiffies = jiffies;
-			} else {
-				diff = jiffies - lm_context->RJ45_10G_jiffies;
-				if (jiffies_to_msecs(diff) > UF_SFP_POLLING_TIMEOUT) {
-					*new_mode = AL_ETH_LM_MODE_1G;
-					lm_context->RJ45_10G_jiffies = jiffies;
-				}
-			}
-			break;
-		case AL_ETH_LM_MODE_1G:
-			*new_mode = AL_ETH_LM_MODE_1G;
-
-			rc = al_mod_eth_lm_link_status_get(lm_context, &status);
-			if (rc || !status.local_fault || !status.remote_fault) {
-				diff = jiffies - lm_context->RJ45_10G_jiffies;
-				if (jiffies_to_msecs(diff) > UF_SFP_POLLING_TIMEOUT) {
-					*new_mode = AL_ETH_LM_MODE_10G_OPTIC;
-					lm_context->RJ45_10G_jiffies = jiffies;
-				}
-			} else {
-				lm_context->RJ45_10G_jiffies = jiffies;
-			}
-			break;
-		default:
-			lm_context->RJ45_10G_jiffies = jiffies;
-			*new_mode = AL_ETH_LM_MODE_10G_OPTIC;
-			break;
-		}
-
-		if (lm_context->mode == AL_ETH_LM_MODE_DISCONNECTED) {
-			if (*new_mode == AL_ETH_LM_MODE_1G)
-				lm_debug("%s: 1G SGMII detected\n", __func__);
-			else
-				lm_debug("%s: 10G-KR detected\n", __func__);
-		}
 	} else if (lm_context->sfp_probe_10g && al_mod_eth_sfp_is_10g(&id)) {
 		*new_mode = AL_ETH_LM_MODE_10G_OPTIC;
 		if ((lm_context->mode != *new_mode) &&
 		    (lm_context->mode == AL_ETH_LM_MODE_DISCONNECTED))
-			lm_debug("%s: 10 SFP detected\n", __func__);
+			lm_debug("%s: 10G SFP detected\n", __func__);
 	} else if (lm_context->sfp_probe_1g && al_mod_eth_sfp_is_1g(&id)) {
 		*new_mode = AL_ETH_LM_MODE_1G;
 		if ((lm_context->mode != *new_mode) &&
@@ -657,12 +601,17 @@ static int al_mod_eth_sfp_detect(struct al_mod_eth_lm_context *lm_context,
 	lm_context->sfp_quirk_flags = sfp_quirk_flags;
 	lm_context->sfp_id_valid = AL_TRUE;
 
-	if (*new_mode != AL_ETH_LM_MODE_DISCONNECTED) {
-		if (lm_context->link_conf.speed > SPEED_10 &&
-		    lm_context->link_conf.speed <= SPEED_1000) {
-			/* 1G DA needs special serdes rx/tx params */
-			*new_mode = (*new_mode == AL_ETH_LM_MODE_10G_DA) ? AL_ETH_LM_MODE_1G_DA :
-									   AL_ETH_LM_MODE_1G;
+	if (lm_context->link_conf.speed > SPEED_10 &&
+	    lm_context->link_conf.speed <= SPEED_1000) {
+		switch (*new_mode) {
+		case AL_ETH_LM_MODE_25G:
+		case AL_ETH_LM_MODE_10G_OPTIC:
+			*new_mode = AL_ETH_LM_MODE_1G;
+			break;
+		/* 1G DA needs special serdes rx/tx params */
+		case AL_ETH_LM_MODE_10G_DA:
+			*new_mode = AL_ETH_LM_MODE_1G_DA;
+			break;
 		}
 	}
 	lm_context->mode = *new_mode;
@@ -1651,6 +1600,9 @@ int al_mod_eth_lm_init(struct al_mod_eth_lm_context	*lm_context,
 			break;
 		case AL_ETH_RETIMER_DS_25:
 			retimer_params.type = AL_ETH_LM_RETIMER_TYPE_DS_25;
+			break;
+		case AL_ETH_RETIMER_DS_125:
+			retimer_params.type = AL_ETH_LM_RETIMER_TYPE_DS_125;
 			break;
 		default:
 			al_mod_assert(AL_FALSE);

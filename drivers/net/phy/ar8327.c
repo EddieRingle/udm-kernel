@@ -232,25 +232,16 @@ ar8327_sw_phy_read16(struct switch_dev *dev, int port, u8 reg, u16 *value)
 }
 
 static int
-ar8327_sw_set_port_link (struct switch_dev *sw_dev, int port,
-			     struct switch_port_link *link)
+ar8327_sw_set_port_link(struct switch_dev *dev, int port,
+			struct switch_port_link *link)
 {
-	struct ar8xxx_priv *priv = swdev_to_ar8xxx(sw_dev);
-	uint32_t status = 0;
-	int rc = 0;
-
 	/* don't allow to control MAC of CPU ports */
 	if (AR8337_HAS_NO_PHY(port)) {
 		return -ENOTSUPP;
 	}
 
-	/* Handle PHY */
-	if ((rc = switch_generic_set_link(sw_dev, port, link))) {
-		return rc;
-	}
-
 	/* MAC can detect speed from PHY by default. */
-	return 0;
+	return switch_generic_set_link(dev, port, link);
 }
 
 static u32
@@ -1252,6 +1243,81 @@ static int ar8327_sw_set_port_isolation(struct switch_dev *dev, const struct swi
 	return 0;
 }
 
+static int ar8327_sw_get_port_mirroring(struct switch_dev *dev,
+					const struct switch_attr *attr,
+					struct switch_val *val)
+{
+	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
+	int rc, port = val->port_vlan;
+	ar8327_port_mirroring_t mstate;
+
+	if (port >= dev->ports)
+		return -EINVAL;
+
+	mstate = priv->port_mirroring[port];
+	switch (mstate) {
+	case (PORT_MIRRORING_NONE):
+		rc = snprintf(priv->buf, sizeof(priv->buf), "%s", "none");
+		break;
+	case (PORT_MIRRORING_MONITOR):
+		rc = snprintf(priv->buf, sizeof(priv->buf), "%s", "monitor");
+		break;
+	case (PORT_MIRRORING_RX):
+		rc = snprintf(priv->buf, sizeof(priv->buf), "%s", "rx");
+		break;
+	case (PORT_MIRRORING_TX):
+		rc = snprintf(priv->buf, sizeof(priv->buf), "%s", "tx");
+		break;
+	case (PORT_MIRRORING_FULL):
+		rc = snprintf(priv->buf, sizeof(priv->buf), "%s", "txrx");
+		break;
+	default:
+		rc = snprintf(priv->buf, sizeof(priv->buf), "unknown-%d", mstate);
+		break;
+	}
+	if (rc < 0)
+		return -ENOMEM;
+
+	val->value.s = priv->buf;
+	val->len = rc;
+	return 0;
+}
+
+#define MAX_MIRRORING_PORTS AR8X16_MAX_PORTS
+
+static int ar8327_sw_set_port_mirroring(struct switch_dev *dev,
+					const struct switch_attr *attr,
+					struct switch_val *val)
+{
+	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
+	int port = val->port_vlan;
+	int i;
+
+	if (port >= dev->ports)
+		return -EINVAL;
+
+	if (!strcmp(val->value.s, "none")) {
+		priv->port_mirroring[port] = PORT_MIRRORING_NONE;
+	} else if (!strcmp(val->value.s, "rxtx") ||
+		   !strcmp(val->value.s, "txrx")) {
+		priv->port_mirroring[port] = PORT_MIRRORING_FULL;
+	} else if (!strcmp(val->value.s, "monitor")) {
+		for (i = 0; i < MAX_MIRRORING_PORTS; i++) {
+			if (priv->port_mirroring[port] == PORT_MIRRORING_MONITOR)
+				priv->port_mirroring[port] = PORT_MIRRORING_NONE;
+		}
+		priv->port_mirroring[port] = PORT_MIRRORING_MONITOR;
+	} else if (!strcmp(val->value.s, "rx")) {
+		priv->port_mirroring[port] = PORT_MIRRORING_RX;
+	} else if (!strcmp(val->value.s, "tx")) {
+		priv->port_mirroring[port] = PORT_MIRRORING_TX;
+	} else {
+		pr_err("port mirroring, unkown cmd: %s\n", val->value.s);
+		return -EINVAL;
+	}
+	return 0;
+}
+
 static int
 ar8327_sw_get_ports(struct switch_dev *dev, struct switch_val *val)
 {
@@ -1308,38 +1374,71 @@ ar8327_sw_set_ports(struct switch_dev *dev, struct switch_val *val)
 static void
 ar8327_set_mirror_regs(struct ar8xxx_priv *priv)
 {
-	int port;
+	int i;
+	static int skip_setting = 1;
+	int some_settings_found = 0;
+	int monitor_port = 0xF; // default disabled
 
-	/* reset all mirror registers */
-	ar8xxx_rmw(priv, AR8327_REG_FWD_CTRL0,
-		   AR8327_FWD_CTRL0_MIRROR_PORT,
-		   (0xF << AR8327_FWD_CTRL0_MIRROR_PORT_S));
-	for (port = 0; port < AR8327_NUM_PORTS; port++) {
-		ar8xxx_reg_clear(priv, AR8327_REG_PORT_LOOKUP(port),
-			   AR8327_PORT_LOOKUP_ING_MIRROR_EN);
-
-		ar8xxx_reg_clear(priv, AR8327_REG_PORT_HOL_CTRL1(port),
-			   AR8327_PORT_HOL_CTRL1_EG_MIRROR_EN);
+	for (i = 0; i < MAX_MIRRORING_PORTS; i++) {
+		switch (priv->port_mirroring[i]) {
+		case (PORT_MIRRORING_NONE):
+			break;
+		case (PORT_MIRRORING_MONITOR):
+			monitor_port = i;
+		default:
+			some_settings_found = 1;
+		}
 	}
-
-	/* now enable mirroring if necessary */
-	if (priv->source_port >= AR8327_NUM_PORTS ||
-	    priv->monitor_port >= AR8327_NUM_PORTS ||
-	    priv->source_port == priv->monitor_port) {
-		return;
+	// optimisation to reduse MII traffic, since port mirroring is not
+	// that often used
+	if (some_settings_found == 0) {
+		if (skip_setting)
+			return;
 	}
+        skip_setting = 0;
 
+	// setup mirror port
 	ar8xxx_rmw(priv, AR8327_REG_FWD_CTRL0,
-		   AR8327_FWD_CTRL0_MIRROR_PORT,
-		   (priv->monitor_port << AR8327_FWD_CTRL0_MIRROR_PORT_S));
+		AR8327_FWD_CTRL0_MIRROR_PORT,
+		(monitor_port << AR8327_FWD_CTRL0_MIRROR_PORT_S));
 
-	if (priv->mirror_rx)
-		ar8xxx_reg_set(priv, AR8327_REG_PORT_LOOKUP(priv->source_port),
-			   AR8327_PORT_LOOKUP_ING_MIRROR_EN);
-
-	if (priv->mirror_tx)
-		ar8xxx_reg_set(priv, AR8327_REG_PORT_HOL_CTRL1(priv->source_port),
-			   AR8327_PORT_HOL_CTRL1_EG_MIRROR_EN);
+	for (i = 0; i < MAX_MIRRORING_PORTS; i++) {
+		switch (priv->port_mirroring[i]) {
+		case (PORT_MIRRORING_MONITOR):
+		case (PORT_MIRRORING_NONE):
+			ar8xxx_reg_clear(priv,
+				AR8327_REG_PORT_LOOKUP(i),
+				AR8327_PORT_LOOKUP_ING_MIRROR_EN);
+			ar8xxx_reg_clear(priv,
+				AR8327_REG_PORT_HOL_CTRL1(i),
+				AR8327_PORT_HOL_CTRL1_EG_MIRROR_EN);
+			break;
+		case (PORT_MIRRORING_FULL):
+			ar8xxx_reg_set(priv,
+				AR8327_REG_PORT_LOOKUP(i),
+				AR8327_PORT_LOOKUP_ING_MIRROR_EN);
+			ar8xxx_reg_set(priv,
+				AR8327_REG_PORT_HOL_CTRL1(i),
+				AR8327_PORT_HOL_CTRL1_EG_MIRROR_EN);
+			break;
+		case (PORT_MIRRORING_RX):
+			ar8xxx_reg_set(priv,
+				AR8327_REG_PORT_LOOKUP(i),
+				AR8327_PORT_LOOKUP_ING_MIRROR_EN);
+			ar8xxx_reg_clear(priv,
+				AR8327_REG_PORT_HOL_CTRL1(i),
+				AR8327_PORT_HOL_CTRL1_EG_MIRROR_EN);
+			break;
+		case (PORT_MIRRORING_TX):
+			ar8xxx_reg_set(priv,
+				AR8327_REG_PORT_HOL_CTRL1(i),
+				AR8327_PORT_HOL_CTRL1_EG_MIRROR_EN);
+			ar8xxx_reg_clear(priv,
+				AR8327_REG_PORT_LOOKUP(i),
+				AR8327_PORT_LOOKUP_ING_MIRROR_EN);
+			break;
+		}
+	}
 }
 
 static int
@@ -1526,7 +1625,7 @@ ar8327_sw_hw_apply(struct switch_dev *dev)
 	if (ret)
 		return ret;
 
-	for (i=0; i < AR8XXX_NUM_PHYS; i++) {
+	for (i = 0; i < AR8XXX_NUM_PHYS; i++) {
 		if (data->eee[i])
 			ar8xxx_reg_clear(priv, AR8327_REG_EEE_CTRL,
 			       AR8327_EEE_CTRL_DISABLE_PHY(i));
@@ -2166,6 +2265,21 @@ static int ar8327_sw_get_acl_table(struct switch_dev *dev, const struct switch_a
 }
 
 /**
+ * @brief Reset all port mirroring functionality
+ */
+static int ar8327_sw_disable_port_mirroring(struct switch_dev *dev,
+					const struct switch_attr *attr,
+					struct switch_val *val)
+{
+	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
+	int i;
+
+	for (i = 0; i < MAX_MIRRORING_PORTS; i++)
+		priv->port_mirroring[i] = PORT_MIRRORING_NONE;
+	return 0;
+}
+
+/**
  * @brief Flush the switch chip's ACL & clear the ACL linked list
  */
 static int ar8327_acl_flush(struct ar8xxx_priv *priv)
@@ -2452,36 +2566,10 @@ static const struct switch_attr ar8327_sw_attr_globals[] = {
 		.set = ar8xxx_sw_set_reset_mibs,
 	},
 	{
-		.type = SWITCH_TYPE_INT,
-		.name = "enable_mirror_rx",
-		.description = "Enable mirroring of RX packets",
-		.set = ar8xxx_sw_set_mirror_rx_enable,
-		.get = ar8xxx_sw_get_mirror_rx_enable,
-		.max = 1
-	},
-	{
-		.type = SWITCH_TYPE_INT,
-		.name = "enable_mirror_tx",
-		.description = "Enable mirroring of TX packets",
-		.set = ar8xxx_sw_set_mirror_tx_enable,
-		.get = ar8xxx_sw_get_mirror_tx_enable,
-		.max = 1
-	},
-	{
-		.type = SWITCH_TYPE_INT,
-		.name = "mirror_monitor_port",
-		.description = "Mirror monitor port",
-		.set = ar8xxx_sw_set_mirror_monitor_port,
-		.get = ar8xxx_sw_get_mirror_monitor_port,
-		.max = AR8327_NUM_PORTS - 1
-	},
-	{
-		.type = SWITCH_TYPE_INT,
-		.name = "mirror_source_port",
-		.description = "Mirror source port",
-		.set = ar8xxx_sw_set_mirror_source_port,
-		.get = ar8xxx_sw_get_mirror_source_port,
-		.max = AR8327_NUM_PORTS - 1
+		.type = SWITCH_TYPE_NOVAL,
+		.name = "disable_port_mirror",
+		.description = "Disable port mirroring",
+		.set = ar8327_sw_disable_port_mirroring,
 	},
 	{
 		.type = SWITCH_TYPE_INT,
@@ -2628,6 +2716,13 @@ static const struct switch_attr ar8327_sw_attr_port[] = {
 		.description ="Get/Set a port isolation mask",
 		.set = ar8327_sw_set_port_isolation,
 		.get = ar8327_sw_get_port_isolation,
+	},
+	{
+		.type = SWITCH_TYPE_STRING,
+		.name = "mirror",
+		.description ="Get/Set a port mirring (none,tx,rx,txrx,monitor)",
+		.set = ar8327_sw_set_port_mirroring,
+		.get = ar8327_sw_get_port_mirroring,
 	},
 };
 

@@ -695,14 +695,26 @@ static ssize_t show_tach(struct device *dev, struct device_attribute *attr,
 	struct adt7475_data *data = adt7475_update_device(dev);
 	struct sensor_device_attribute_2 *sattr = to_sensor_dev_attr_2(attr);
 	int out;
+#ifdef CONFIG_SENSOR_ADT7475_FAN_SWAP_FIX
+	u8 tmp_index;
+#endif
 
 	if (IS_ERR(data))
 		return PTR_ERR(data);
 
+#ifdef CONFIG_SENSOR_ADT7475_FAN_SWAP_FIX
+	tmp_index = !sattr->index;
+
+	if (sattr->nr == ALARM)
+		out = (data->alarms >> (tmp_index + 10)) & 1;
+	else
+		out = tach2rpm(data->tach[sattr->nr][tmp_index]);
+#else
 	if (sattr->nr == ALARM)
 		out = (data->alarms >> (sattr->index + 10)) & 1;
 	else
 		out = tach2rpm(data->tach[sattr->nr][sattr->index]);
+#endif
 
 	return sprintf(buf, "%d\n", out);
 }

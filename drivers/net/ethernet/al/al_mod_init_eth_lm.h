@@ -369,7 +369,6 @@ struct al_mod_eth_lm_context {
 	al_mod_bool sfp_id_valid;
 	/* lm context lock */
 	struct mutex  lock;
-	unsigned long RJ45_10G_jiffies;
 };
 
 struct al_mod_eth_lm_init_params {

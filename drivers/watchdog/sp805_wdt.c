@@ -383,6 +383,14 @@ err:
 	return ret;
 }
 
+static void sp805_wdt_shutdown(struct amba_device *adev)
+{
+	struct sp805_wdt *wdt = amba_get_drvdata(adev);
+
+	if (watchdog_active(&wdt->wdd))
+		wdt_disable(&wdt->wdd);
+}
+
 static int sp805_wdt_remove(struct amba_device *adev)
 {
 	struct sp805_wdt *wdt = amba_get_drvdata(adev);
@@ -435,6 +443,7 @@ static struct amba_driver sp805_wdt_driver = {
 	.id_table	= sp805_wdt_ids,
 	.probe		= sp805_wdt_probe,
 	.remove = sp805_wdt_remove,
+	.shutdown = sp805_wdt_shutdown,
 };
 
 module_amba_driver(sp805_wdt_driver);

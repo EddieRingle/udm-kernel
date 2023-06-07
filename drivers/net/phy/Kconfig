@@ -513,6 +513,18 @@ config REALTEK_PHY
 	---help---
 	  Supports the Realtek 821x PHY.
 
+config RTL8211F_LED1_ENABLE
+	bool "enable LED1 configuration based on HW"
+	depends on REALTEK_PHY
+	---help---
+	   This option enables LED1 configuration according hardware setup
+
+config RTL8211F_LED0_ENABLE
+	bool "enable LED0 configuration based on HW"
+	depends on REALTEK_PHY
+	---help---
+	   This option enables LED0 configuration according hardware setup
+
 config RENESAS_PHY
 	tristate "Driver for Renesas PHYs"
 	---help---
@@ -557,12 +569,25 @@ config RTL83XX_API
 
 config RTL8370_PHY
 	bool "Driver for the Realtek RTL8370MB switch"
-	select SWCONFIG 
+	select SWCONFIG
 	select RTL83XX_API
 	select UBNT_ACL
+
+config SWCONFIG_ADV_MODE_SUPPORT
+	bool "Send advertisement modes in link attribute type"
+	depends on SWCONFIG
+	default y
+	---help---
+	  Send advertisement modes in link attribute type.
 
 endif # PHYLIB
 
 config MICREL_KS8995MA
 	tristate "Micrel KS8995MA 5-ports 10/100 managed Ethernet switch"
 	depends on SPI
+
+config AR8033_DISABLE_EEE
+	bool "Disable 1000BT/100BT EEE advertisement"
+	depends on AT803X_PHY
+	---help---
+	  Disable EEE advertisement for 1000BT/100BT

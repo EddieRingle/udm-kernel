@@ -107,4 +107,26 @@ config R8169
 	  To compile this driver as a module, choose M here: the module
 	  will be called r8169.  This is recommended.
 
+config R8125
+	tristate "Realtek 8125 2.5G/gigabit ethernet support"
+	depends on PCI
+	select CRC32
+	select MII
+	---help---
+	  Say Y here if you have a Realtek 8125 PCI Gigabit Ethernet adapter.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called r8125.  This is recommended.
+
+config R8125_ALPINE_TX_DMA_QUIRK_CHECK
+	bool "Extra check (and downgrade of TX_DMA_BURST if necessary) in r8125 driver of PCIe domain when connected to Alpine SoC"
+	default n
+        depends on R8125
+	---help---
+	  Say Y here if you have Realtek 8125 PCI GE adapter connected to Alpine SoC.
+	  One of PCIe domains there has issues with tx of large amounts of data which prevents
+	  the use of maximum possible TX_DMA_BURST in r8125 driver.
+	  This option checks the domain number and changes TX_DMA_BURST from unlimited to 64bytes.
+
+
 endif # NET_VENDOR_REALTEK

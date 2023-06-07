@@ -337,6 +337,25 @@ static rtk_api_ret_t _rtk_led_groupAbility_get(rtk_led_group_t group, rtk_led_ab
 	return RT_ERR_OK;
 }
 
+static rtk_api_ret_t _rtk_led_serialShiftSequenceMask_set(rtk_uint32 mask)
+{
+	/* Check initialization state */
+	RTK_CHK_INIT_STATE();
+
+	return rtl8367c_setAsicLedSerialShiftSequenceMask(mask);
+}
+
+static rtk_api_ret_t _rtk_led_serialShiftSequenceMask_get(rtk_uint32 *mask)
+{
+	/* Check initialization state */
+	RTK_CHK_INIT_STATE();
+
+	if (NULL == mask)
+		return RT_ERR_NULL_POINTER;
+
+	return rtl8367c_getAsicLedSerialShiftSequenceMask(mask);
+}
+
 static rtk_api_ret_t _rtk_led_serialMode_set(rtk_led_active_t active)
 {
 	rtk_api_ret_t retVal;
@@ -815,6 +834,61 @@ rtk_api_ret_t rtk_led_groupAbility_get(rtk_led_group_t group, rtk_led_ability_t 
 
 	RTK_API_LOCK();
 	retVal = _rtk_led_groupAbility_get(group, pAbility);
+	RTK_API_UNLOCK();
+
+	return retVal;
+}
+
+/* Function Name:
+ *      rtk_led_serialShiftSequenceMask_set
+ * Description:
+ *      Set LED serial shift sequence mask
+ * Input:
+ *      mask - LED shift mask.
+ * Output:
+ *      None
+ * Return:
+ *      RT_ERR_OK           - OK
+ *      RT_ERR_FAILED       - Failed
+ *      RT_ERR_SMI          - SMI access error
+ *      RT_ERR_INPUT        - Invalid input parameters.
+ * Note:
+ *      The API can set LED serial shift sequence mask.
+ */
+rtk_api_ret_t rtk_led_serialShiftSequenceMask_set(rtk_uint32 mask)
+{
+	rtk_api_ret_t retVal;
+
+	RTK_API_LOCK();
+	retVal = _rtk_led_serialShiftSequenceMask_set(mask);
+	RTK_API_UNLOCK();
+
+	return retVal;
+}
+
+/* Function Name:
+ *      rtk_led_serialShiftSequenceMask_get
+ * Description:
+ *      Get LED serial shift sequence mask
+ * Input:
+ *      None
+ * Output:
+ *      mask - LED shift mask.
+ * Return:
+ *      RT_ERR_OK           - OK
+ *      RT_ERR_FAILED       - Failed
+ *      RT_ERR_SMI          - SMI access error
+ *      RT_ERR_INPUT        - Invalid input parameters.
+ *      RT_ERR_NULL_POINTER - NULL-pointer was supplied instead of valid pointer for mask.
+ * Note:
+ *      The API can get LED serial shift sequence mask.
+ */
+rtk_api_ret_t rtk_led_serialShiftSequenceMask_get(rtk_uint32 *mask)
+{
+	rtk_api_ret_t retVal;
+
+	RTK_API_LOCK();
+	retVal = _rtk_led_serialShiftSequenceMask_get(mask);
 	RTK_API_UNLOCK();
 
 	return retVal;

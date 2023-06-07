@@ -2055,6 +2055,7 @@ struct net_device {
 #define UBNT_NFBYPASS_MARK      (1 << 3)
 #define UBNT_VWIRE              (1 << 4)
 #define UBNT_VPORT              (1 << 5)
+#define UBNT_BNDSTEER_ENABLE    (1 << 6)
 	unsigned		wol_enabled:1;
 };
 #define UBNT_IS_FRAME_ID_ENABLE(_dev)   ((_dev)->ubnt_flags & UBNT_FRAME_ID_ENABLE)
@@ -2063,6 +2064,7 @@ struct net_device {
 #define UBNT_IS_NFBYPASS_MARK(_dev)     ((_dev)->ubnt_flags & UBNT_NFBYPASS_MARK)
 #define UBNT_IS_VWIRE(_dev)             ((_dev)->ubnt_flags & UBNT_VWIRE)
 #define UBNT_IS_VPORT(_dev)             ((_dev)->ubnt_flags & UBNT_VPORT)
+#define UBNT_IS_BNDSTEER_ENABLE(_dev)   ((_dev)->ubnt_flags & UBNT_BNDSTEER_ENABLE)
 #define to_net_dev(d) container_of(d, struct net_device, dev)
 
 static inline bool netif_elide_gro(const struct net_device *dev)

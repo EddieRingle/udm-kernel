@@ -26,6 +26,7 @@
 #include <linux/of.h>
 #include <linux/version.h>
 #include <uapi/linux/mii.h>
+#include <linux/mii.h>
 
 #define SWCONFIG_DEVNAME	"switch%d"
 
@@ -372,6 +373,10 @@ static struct nla_policy link_policy[SWITCH_LINK_ATTR_MAX] = {
 	[SWITCH_LINK_FLAG_RX_FLOW] = { .type = NLA_FLAG },
 	[SWITCH_LINK_FLAG_TX_FLOW] = { .type = NLA_FLAG },
 	[SWITCH_LINK_SPEED] = { .type = NLA_U32 },
+#ifdef CONFIG_SWCONFIG_ADV_MODE_SUPPORT
+	[SWITCH_LINK_ADVERTISED_MODE] = { .type = NLA_U32 },
+	[SWITCH_LINK_LP_ADVERTISED_MODE] = { .type = NLA_U32 },
+#endif /* CONFIG_SWCONFIG_ADV_MODE_SUPPORT */
 #ifdef CONFIG_SWCONFIG_UBNT_EXT
 	[SWITCH_LINK_FLAG_POWER_DOWN] = { .type = NLA_FLAG },
 #endif /* CONFIG_SWCONFIG_UBNT_EXT */
@@ -936,6 +941,15 @@ swconfig_send_link(struct sk_buff *msg, struct genl_info *info, int attr,
 	}
 	if (nla_put_u32(msg, SWITCH_LINK_SPEED, link->speed))
 		goto nla_put_failure;
+
+#ifdef CONFIG_SWCONFIG_ADV_MODE_SUPPORT
+	if (nla_put_u32(msg, SWITCH_LINK_ADVERTISED_MODE, link->adv))
+		goto nla_put_failure;
+
+	if (nla_put_u32(msg, SWITCH_LINK_LP_ADVERTISED_MODE, link->adv_lp))
+		goto nla_put_failure;
+#endif /* CONFIG_SWCONFIG_ADV_MODE_SUPPORT */
+
 	if (link->eee & ADVERTISED_100baseT_Full) {
 		if (nla_put_flag(msg, SWITCH_LINK_FLAG_EEE_100BASET))
 			goto nla_put_failure;
@@ -1362,12 +1376,96 @@ unregister_switch(struct switch_dev *dev)
 }
 EXPORT_SYMBOL_GPL(unregister_switch);
 
-static int
-set_phy_adv_to_max(struct switch_dev *dev, int port)
+int
+switch_generic_get_link(struct switch_dev *dev, int port,
+			struct switch_port_link *link)
+{
+	u32 nego, eth_adv, eth_adv_lp;
+	u16 bmcr, bmsr, adv, adv_lp = 0, ctrl1000 = 0, stat1000 = 0;
+	u8 cap;
+
+	if (WARN_ON(!dev->ops->phy_read16))
+		return -ENOTSUPP;
+
+	/* first, a dummy read, needed to latch some MII phys */
+	dev->ops->phy_read16(dev, port, MII_BMSR, &bmsr);
+	dev->ops->phy_read16(dev, port, MII_BMSR, &bmsr);
+	link->link = !!(bmsr & BMSR_LSTATUS);
+	dev->ops->phy_read16(dev, port, MII_ADVERTISE, &adv);
+	dev->ops->phy_read16(dev, port, MII_BMCR, &bmcr);
+#ifdef CONFIG_SWCONFIG_UBNT_EXT
+	link->power_down = !!(bmcr & BMCR_PDOWN);
+#endif /* CONFIG_SWCONFIG_UBNT_EXT */
+	link->aneg = !!(bmcr & BMCR_ANENABLE);
+	if (link->aneg) {
+
+		/* Per 802.3-2008, Section 22.2.4.2.16 Extended status all
+		* 1000Mbits/sec capable PHYs shall have the BMSR_ESTATEN bit set to a
+		* logical 1.
+		*/
+		if (bmsr & BMSR_ESTATEN) {
+			dev->ops->phy_read16(dev, port, MII_CTRL1000, &ctrl1000);
+			dev->ops->phy_read16(dev, port, MII_STAT1000, &stat1000);
+		}
+
+		eth_adv = ADVERTISED_TP | ADVERTISED_MII | ADVERTISED_Autoneg;
+		eth_adv |= mii_lpa_to_ethtool_lpa_t(adv);
+		eth_adv |= mii_ctrl1000_to_ethtool_adv_t(ctrl1000);
+
+		if (bmsr & BMSR_ANEGCOMPLETE) {
+			dev->ops->phy_read16(dev, port, MII_LPA, &adv_lp);
+			eth_adv_lp = mii_lpa_to_ethtool_lpa_t(adv_lp);
+			eth_adv_lp |= mii_stat1000_to_ethtool_lpa_t(stat1000);
+		} else
+			eth_adv_lp = 0;
+
+#ifdef CONFIG_SWCONFIG_ADV_MODE_SUPPORT
+		link->adv = eth_adv;
+		link->adv_lp = eth_adv_lp;
+#endif /* CONFIG_SWCONFIG_ADV_MODE_SUPPORT */
+		nego = eth_adv & eth_adv_lp;
+
+		if (nego &
+			(ADVERTISED_1000baseT_Full | ADVERTISED_1000baseT_Half)) {
+				link->speed = SWITCH_PORT_SPEED_1000;
+				link->duplex = !!(nego & ADVERTISED_1000baseT_Full);
+		} else if (nego & (ADVERTISED_100baseT_Full |
+				ADVERTISED_100baseT_Half)) {
+				link->speed = SWITCH_PORT_SPEED_100;
+				link->duplex = !!(nego & ADVERTISED_100baseT_Full);
+		} else {
+			link->speed = SWITCH_PORT_SPEED_10;
+			link->duplex = !!(nego & ADVERTISED_10baseT_Full);
+		}
+
+		cap = mii_resolve_flowctrl_fdx(adv, adv_lp);
+		link->rx_flow = !!(cap & FLOW_CTRL_RX);
+		link->tx_flow = !!(cap & FLOW_CTRL_TX);
+	} else {
+		if ((bmcr & BMCR_SPEED1000) && !(bmcr & BMCR_SPEED100))
+			link->speed = SWITCH_PORT_SPEED_1000;
+		else if (bmcr & BMCR_SPEED100)
+			link->speed = SWITCH_PORT_SPEED_100;
+		else
+			link->speed = SWITCH_PORT_SPEED_10;
+
+		link->duplex = !!(bmcr & BMCR_FULLDPLX);
+		link->rx_flow = !!(adv & ADVERTISE_PAUSE_CAP);
+		link->tx_flow =
+			!!(adv & (ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM));
+	}
+
+	return 0;
+}
+
+EXPORT_SYMBOL_GPL(switch_generic_get_link);
+
+inline static int
+set_phy_adv_to_max(struct switch_dev *dev, int port, u16 fc)
 {
 	int rc = 0;
-	u16 status; // contains port capabilities
-	u16 adv; // contains advertised capabilities
+	u16 status; // port capabilities
+	u16 adv; // advertised capabilities
 
 	// set to max 10M and 100M capabilities
 	rc |= dev->ops->phy_read16(dev, port, MII_BMSR, &status);
@@ -1375,6 +1473,7 @@ set_phy_adv_to_max(struct switch_dev *dev, int port)
 	status = (status >> 6) & (0x1F << 5);
 	adv &= ~(0x1F << 5);
 	adv |= status;
+	adv |= fc; // add flow control
 	rc |= dev->ops->phy_write16(dev, port, MII_ADVERTISE, adv);
 
 	// set to max 1G capabilities
@@ -1387,84 +1486,131 @@ set_phy_adv_to_max(struct switch_dev *dev, int port)
 	return rc;
 }
 
-static int
-set_phy_adv_to_1G(struct switch_dev *dev, int port)
+inline static int
+validate_phy_settings(struct switch_dev *dev, int port,
+		      struct switch_port_link *link)
 {
-	int rc = 0;
-	u16 status; // contains port capabilities
-	u16 adv; // contains advertised capabilities
+	u16 ability = 0;
 
-	// reset 10M and 100M capabilities
-	rc |= dev->ops->phy_read16(dev, port, MII_ADVERTISE, &adv);
-	adv &= ~(0x1F << 5);
-	rc |= dev->ops->phy_write16(dev, port, MII_ADVERTISE, adv);
+	if (link->aneg)
+		return 0;
 
-	// set to max 1G capabilities
-	rc |= dev->ops->phy_read16(dev, port, MII_ESTATUS, &status);
-	rc |= dev->ops->phy_read16(dev, port, MII_CTRL1000, &adv);
-	status = (status >> 4) & (0x03 << 8);
-	adv &= ~(0x03 << 8);
-	adv |= status;
-	rc |= dev->ops->phy_write16(dev, port, MII_CTRL1000, adv);
-	return rc;
+	if (link->tx_flow || link->rx_flow)
+		goto no_supp;
+
+	switch (link->speed) {
+	case SWITCH_PORT_SPEED_10:
+		dev->ops->phy_read16(dev, port, MII_BMSR, &ability);
+		if (link->duplex) {
+			if ((ability & BMSR_10FULL) == 0)
+				goto no_supp;
+		} else {
+			if ((ability & BMSR_10HALF) == 0)
+				goto no_supp;
+		}
+		break;
+	case SWITCH_PORT_SPEED_100:
+		dev->ops->phy_read16(dev, port, MII_BMSR, &ability);
+		if (link->duplex) {
+			if ((ability & BMSR_100FULL) == 0)
+				goto no_supp;
+		} else {
+			if ((ability & BMSR_100HALF) == 0)
+				goto no_supp;
+		}
+		break;
+	case SWITCH_PORT_SPEED_1000:
+		dev->ops->phy_read16(dev, port, MII_ESTATUS, &ability);
+		if (link->duplex) {
+			if ((ability & ESTATUS_1000_TFULL) == 0)
+				goto no_supp;
+		} else {
+			if ((ability & ESTATUS_1000_THALF) == 0)
+				goto no_supp;
+		}
+		break;
+	default:
+	case SWITCH_PORT_SPEED_UNKNOWN:
+		goto no_supp;
+	}
+	return 0;
+no_supp:
+	pr_err("PHY-%d setting not supported: speed:%d FD:%d tx:%d rx:%d\n",
+		port, link->speed, link->duplex, link->tx_flow, link->rx_flow);
+	return -ENOTSUPP;
 }
 
 int
 switch_generic_set_link(struct switch_dev *dev, int port,
 			struct switch_port_link *link)
 {
-	int rc;
-	if (WARN_ON(!dev->ops->phy_write16))
+	int rc = 0;
+	int cap;
+
+	if (WARN_ON(!dev->ops->phy_write16) || WARN_ON(!dev->ops->phy_read16))
 		return -ENOTSUPP;
 
+	rc = validate_phy_settings(dev, port, link);
+	if (rc)
+		return rc;
+
+	/* UDM: We want to put port down, otherwise it fails to go Base10-T FD,
+	 * when other side is already set to Base10-T FD - it goes HD.
+	 */
+	rc |= dev->ops->phy_write16(dev, port, MII_BMCR, BMCR_PDOWN);
 #ifdef CONFIG_SWCONFIG_UBNT_EXT
-	if(link->power_down) {
-		dev->ops->phy_write16(dev, port, MII_BMCR, BMCR_PDOWN);
-	} else
+	if (!link->power_down)
 #endif
 	{
-		/* Generic implementation */
-		if (link->aneg) {
-			rc = set_phy_adv_to_max(dev, port);
-			if (rc) {
-				pr_err("Failed to set A-NEG to max\n");
-				return -EFAULT;
-			}
-			dev->ops->phy_write16(dev, port, MII_BMCR, 0x0000);
-			dev->ops->phy_write16(dev, port, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
-		} else {
-			u16 bmcr = 0;
+		u16 adv;
+		u16 adv_1G = 0;
+		u16 bmcr = BMCR_ANENABLE | BMCR_ANRESTART; // set autoneg
 
+		cap =   ((link->rx_flow) ? FLOW_CTRL_RX : 0) |
+			((link->tx_flow) ? FLOW_CTRL_TX : 0);
+		adv = mii_advertise_flowctrl(cap);
+
+		switch (link->speed) {
+		case SWITCH_PORT_SPEED_10:
+			if (!link->aneg)
+				bmcr = BMCR_SPEED10; // reset autoneg
 			if (link->duplex)
-				bmcr |= BMCR_FULLDPLX;
-
-			switch (link->speed) {
-			case SWITCH_PORT_SPEED_10:
-				break;
-			case SWITCH_PORT_SPEED_100:
-				bmcr |= BMCR_SPEED100;
-				break;
-			case SWITCH_PORT_SPEED_1000:
-				/* According to IEEE, 1G and above always should
-				 * have autoneg On. If only 1G is desired then
-				 * only advertisement should be set accordingly.
-				 */
-				rc = set_phy_adv_to_1G(dev, port);
-				if (rc) {
-					pr_err("Failed to set A-NEG to 1G\n");
-					return -EFAULT;
-				}
-				bmcr = BMCR_ANENABLE | BMCR_ANRESTART;
-				break;
-			default:
-				return -ENOTSUPP;
-			}
-
-			dev->ops->phy_write16(dev, port, MII_BMCR, bmcr);
+				adv |= ADVERTISE_10FULL;
+			else
+				adv |= ADVERTISE_10HALF;
+			break;
+		case SWITCH_PORT_SPEED_100:
+			if (!link->aneg)
+				bmcr = BMCR_SPEED100; // reset autoneg
+			if (link->duplex)
+				adv |= ADVERTISE_100FULL;
+			else
+				adv |= ADVERTISE_100HALF;
+			break;
+		case SWITCH_PORT_SPEED_1000:
+			if (link->duplex)
+				adv_1G |= ADVERTISE_1000FULL;
+			else
+				adv_1G |= ADVERTISE_1000HALF;
+			break;
+		default:
+			pr_warn("%s: unknown speed %d\n", __func__, link->speed);
+		case SWITCH_PORT_SPEED_UNKNOWN: // valid if A-neg ON
+			rc |= set_phy_adv_to_max(dev, port, adv);
+			break;
 		}
-	}
+		if (link->duplex)
+			bmcr |= BMCR_FULLDPLX;
 
-	return 0;
+		if (link->speed != SWITCH_PORT_SPEED_UNKNOWN) {
+			rc |= dev->ops->phy_write16(dev, port, MII_ADVERTISE, adv);
+			rc |= dev->ops->phy_write16(dev, port, MII_CTRL1000, adv_1G);
+		}
+		rc |= dev->ops->phy_write16(dev, port, MII_BMCR, bmcr);
+	}
+	if (rc)
+		pr_err("%s: failed\n", __func__);
+	return rc;
 }
 
 static int __init

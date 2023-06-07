@@ -136,4 +136,12 @@ config LEDS_TRIGGER_EXTERNAL
 	  This allows LEDs to be controlled by external trigger.
 	  If unsure, say Y.
 
+config LEDS_TRIGGER_EXTERNAL_MAX
+	int "Maximum number of external trigger"
+	range 1 16
+	default 4
+	depends on LEDS_TRIGGER_EXTERNAL
+	help
+	  This value will be referenced by ledtrig-ext and leds-ulogo.
+
 endif # LEDS_TRIGGERS

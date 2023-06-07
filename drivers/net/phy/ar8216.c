@@ -363,6 +363,15 @@ ar8xxx_sw_phy_write16(struct switch_dev *dev, int addr, u8 reg, u16 value)
 	return mdiobus_write(bus, addr, reg, value);
 }
 
+int
+ar8xxx_sw_phy_read16(struct switch_dev *dev, int addr, u8 reg, u16 *value)
+{
+	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
+	struct mii_bus *bus = priv->mii_bus;
+	*value = mdiobus_read(bus, addr, reg);
+	return 0;
+}
+
 static int
 ar8xxx_reg_wait(struct ar8xxx_priv *priv, u32 reg, u32 mask, u32 val,
 		unsigned timeout)

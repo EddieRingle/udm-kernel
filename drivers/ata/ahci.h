@@ -383,6 +383,9 @@ struct ahci_host_priv {
 						  int port);
 #ifdef CONFIG_ARCH_ALPINE
 	int			led_gpio[AHCI_MAX_PORTS];
+#if defined (CONFIG_UBNT_HDD_PWRCTL) || defined (CONFIG_UBNT_HDD_PWRCTL_V2)
+	int			fault_led_gpio[AHCI_MAX_PORTS];
+#endif
 #endif
 };
 

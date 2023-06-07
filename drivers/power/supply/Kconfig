@@ -645,4 +645,11 @@ config CHARGER_CROS_USBPD
 	  what is connected to USB PD ports from the EC and converts
 	  that into power_supply properties.
 
+config PSU_G1320
+	tristate "Power Supply driver for G1320"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Say Y to enable support for G1320 PSU driver.
+
 endif # POWER_SUPPLY

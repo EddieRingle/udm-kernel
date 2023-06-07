@@ -31,15 +31,22 @@
 
 #define RTL821x_PAGE_SELECT			0x1f
 
+#define RTL8211F_PHYCR1				0x18
 #define RTL8211F_INSR				0x1d
 
 #define RTL8211F_TX_DELAY			BIT(8)
+#define RTL8211F_PHYAD0_ENABLE			BIT(13)
 
 #define RTL8201F_ISR				0x1e
 #define RTL8201F_IER				0x13
 
 #define RTL8366RB_POWER_SAVE			0x15
 #define RTL8366RB_POWER_SAVE_ON			BIT(12)
+
+#define MIIM_RTL8211F_LED1_LINK_1G     0x100
+#define MIIM_RTL8211F_LED1_ACT         0x200
+#define MIIM_RTL8211F_LED1_LINK_100M   0x40
+#define MIIM_RTL8211F_LED0_LINK_100M   0x2
 
 MODULE_DESCRIPTION("Realtek PHY driver");
 MODULE_AUTHOR("Johnson Leung");
@@ -163,10 +170,10 @@ static int rtl8211c_config_init(struct phy_device *phydev)
 	return genphy_config_init(phydev);
 }
 
-static void rtl8211f_led_config(struct phy_device *phydev)
+static void rtl8211f_phyad0_config(struct phy_device *phydev)
 {
 	struct device_node *node;
-	u32 led_config;
+	u32 reg;
 	struct of_device_id of_realtek_table[] = {
 		{.compatible = "realtek,rtl8211fs"},
 		{ /* end of list */ },
@@ -178,28 +185,39 @@ static void rtl8211f_led_config(struct phy_device *phydev)
 		return;
 	}
 
-	dev_info(&phydev->mdio.dev, "rtl8211fs entry is found\n");
-	/* configure LED setup accordingly */
-	if (!of_property_read_u32(node, "led-mode", &led_config)) {
-		dev_info(&phydev->mdio.dev, "led-mode: 0x%04x\n", led_config);
-		phy_write(phydev, RTL821x_PAGE_SELECT, 0xd04);
-		phy_write(phydev, 0x10, led_config);
+	if (of_property_read_bool(node, "disable-phyad0-bcast")) {
+		phy_write(phydev, RTL821x_PAGE_SELECT, 0xa43);
+		reg = phy_read(phydev, RTL8211F_PHYCR1);
+		reg &= ~(RTL8211F_PHYAD0_ENABLE);
+		phy_write(phydev, RTL8211F_PHYCR1, reg);
+		dev_info(&phydev->mdio.dev, "rtl8211fs PHYCR1 reg: 0x%04x\n", reg);
+
+		/* restore to default page 0 */
 		phy_write(phydev, RTL821x_PAGE_SELECT, 0x0);
 	}
-
-	return;
 }
 
 static int rtl8211f_config_init(struct phy_device *phydev)
 {
 	int ret;
 	u16 val = 0;
-
+#ifdef CONFIG_RTL8211F_LED1_ENABLE
+	u16 led_config;
+#endif
 	ret = genphy_config_init(phydev);
 	if (ret < 0)
 		return ret;
 
-	rtl8211f_led_config(phydev);
+	rtl8211f_phyad0_config(phydev);
+#ifdef CONFIG_RTL8211F_LED1_ENABLE
+	led_config = (MIIM_RTL8211F_LED1_LINK_1G | MIIM_RTL8211F_LED1_ACT |
+					MIIM_RTL8211F_LED1_LINK_100M);
+#ifdef CONFIG_RTL8211F_LED0_ENABLE
+	led_config |= MIIM_RTL8211F_LED0_LINK_100M;
+	led_config &= ~(MIIM_RTL8211F_LED1_LINK_100M);
+#endif
+	phy_modify_paged(phydev, 0xd04, 0x10, led_config, led_config);
+#endif
 
 	/* enable TX-delay for rgmii-id and rgmii-txid, otherwise disable it */
 	if (phydev->interface == PHY_INTERFACE_MODE_RGMII_ID ||

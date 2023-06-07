@@ -25,6 +25,8 @@ enum al_mod_eth_lm_retimer_type {
 	AL_ETH_LM_RETIMER_TYPE_BR_410,
 	/** TI DS25 */
 	AL_ETH_LM_RETIMER_TYPE_DS_25,
+	/** TI DS125 */
+	AL_ETH_LM_RETIMER_TYPE_DS_125,
 	AL_ETH_LM_RETIMER_TYPE_NUM,
 };
 
