@@ -43,9 +43,9 @@ shift $((OPTIND - 1))
 echo "Preparing kernel configuration..."
 
 if [ -n "$stock" ]; then
-    scripts/kconfig/merge_config.sh -m .github/config/config.stock.udm
+    scripts/kconfig/merge_config.sh -m .github/config/config.stock.udmse
 else
-    scripts/kconfig/merge_config.sh -m .github/config/config.stock.udm .github/config/config.edge.udm
+    scripts/kconfig/merge_config.sh -m .github/config/config.stock.udmse .github/config/config.edge.udm
 
     # Support local options
     if [ -f .github/config/config.local.udm ]; then
