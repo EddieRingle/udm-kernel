@@ -530,6 +530,8 @@ struct phymsg {
 
 struct loopmsg {
 	unsigned char loop;
+	unsigned int len;
+	unsigned char loop_pkt[0];
 };
 
 /********************************************************************

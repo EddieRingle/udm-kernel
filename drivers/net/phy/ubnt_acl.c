@@ -9,7 +9,7 @@
 #include <linux/if_ether.h>
 #include <linux/ctype.h>
 
-#include "ubnt_acl.h"
+#include <linux/ubnt_acl.h>
 
 static const char *acl_state_str[] = {
 #define X(state) #state,
@@ -25,12 +25,17 @@ static const char *acl_state_str[] = {
  */
 static void ubnt_acl_flush_sw(struct acl_hw *hw)
 {
+	struct list_head *lst = &hw->acl_table.list;
 	acl_entry_t *entry, *entry_temp;
+
+	/* Check whether the list is initialized */
+	if (!lst->next && !lst->prev)
+		return;
 
 	/**
 	 * Drop all entries
 	 */
-	list_for_each_entry_safe (entry, entry_temp, &hw->acl_table.list, list) {
+	list_for_each_entry_safe (entry, entry_temp, lst, list) {
 		list_del(&entry->list);
 		kfree(entry);
 	}
@@ -61,6 +66,7 @@ int ubnt_mac_zero_addr(acl_mac_t *mac)
 	}
 	return 0;
 }
+EXPORT_SYMBOL(ubnt_mac_zero_addr);
 
 /**
  * @brief Compare two MAC addresses
@@ -177,6 +183,7 @@ int ubnt_acl_rule_get(struct acl_hw *hw, acl_entry_t *entry_in)
 	}
 	return -EINVAL;
 }
+EXPORT_SYMBOL(ubnt_acl_rule_get);
 
 /**
  * @brief Add rule to the ACL's linked list
@@ -393,6 +400,7 @@ int ubnt_acl_rule_process(struct acl_hw *hw, const char *rule, acl_entry_type_t 
 	const char *ptr;
 	acl_entry_t entry_out;
 	char key_hit[ACL_KEY_CNT] = { 0 };
+	enum { ACL_RULE_CMD_ADD = 0, ACL_RULE_CMD_DEL, ACL_RULE_CMD_UNKNOWN };
 
 	if (NULL == hw)
 		return -EINVAL;
@@ -417,7 +425,6 @@ int ubnt_acl_rule_process(struct acl_hw *hw, const char *rule, acl_entry_type_t 
 	 *		"add ports_src '1' port_dst '0' vlan_dst '4091' ether_type '0x88CC'"
 	 *		"del ports_src '0' port_dst '1'"
 	 */
-	enum { ACL_RULE_CMD_ADD = 0, ACL_RULE_CMD_DEL, ACL_RULE_CMD_UNKNOWN };
 
 	while (isblank(*rule))
 		rule++;
@@ -528,6 +535,7 @@ int ubnt_acl_rule_process(struct acl_hw *hw, const char *rule, acl_entry_type_t 
 	}
 	return 0;
 }
+EXPORT_SYMBOL(ubnt_acl_rule_process);
 
 /**
  * @brief Get ACL table
@@ -659,6 +667,7 @@ int ubnt_acl_get_acl_table(struct acl_hw *hw)
 error:
 	return -ENOMEM;
 }
+EXPORT_SYMBOL(ubnt_acl_get_acl_table);
 
 /**
  * @brief Dealloc the ACL control structures
@@ -679,6 +688,7 @@ void ubnt_acl_destroy(struct acl_hw *hw)
 		}
 	}
 }
+EXPORT_SYMBOL(ubnt_acl_destroy);
 
 /**
  * @brief Init the ACL
@@ -726,8 +736,8 @@ int ubnt_acl_init(struct acl_hw *hw)
 	/**
 	 * ACL list init
 	 */
-	INIT_LIST_HEAD(&hw->acl_table.list);
 	ubnt_acl_flush_sw(hw);
+	INIT_LIST_HEAD(&hw->acl_table.list);
 	hw->acl_table.enable = 0;
 
 	/**
@@ -750,6 +760,7 @@ int ubnt_acl_init(struct acl_hw *hw)
 
 	return 0;
 }
+EXPORT_SYMBOL(ubnt_acl_init);
 
 /**
  * @brief Retrive ACL status
@@ -766,6 +777,7 @@ int ubnt_acl_enable_get(struct acl_hw *hw, int *enable)
 	*enable = hw->acl_table.enable;
 	return 0;
 }
+EXPORT_SYMBOL(ubnt_acl_enable_get);
 
 /**
  * @brief Set ACL status
@@ -782,6 +794,7 @@ int ubnt_acl_enable_set(struct acl_hw *hw, int enable)
 	hw->acl_table.enable = !!enable;
 	return 0;
 }
+EXPORT_SYMBOL(ubnt_acl_enable_set);
 
 /**
  * @brief Flush the switch hw's ACL & clear the ACL linked list
@@ -815,6 +828,7 @@ int ubnt_acl_flush(struct acl_hw *hw)
 	}
 	return 0;
 }
+EXPORT_SYMBOL(ubnt_acl_flush);
 
 /**
  * @brief Load switch hw's ACL list to linked list and sync
@@ -867,6 +881,7 @@ int ubnt_acl_preload(struct acl_hw *hw)
 exit:
 	return rc;
 }
+EXPORT_SYMBOL(ubnt_acl_preload);
 
 /**
  * @brief Flush HW ACL, clear counters, clear idx_last, remove deleted rules from
@@ -1004,3 +1019,4 @@ int ubnt_acl_sync(struct acl_hw *hw)
 exit:
 	return rc;
 }
+EXPORT_SYMBOL(ubnt_acl_sync);

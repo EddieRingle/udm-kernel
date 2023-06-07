@@ -1836,7 +1836,14 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 			err = of_property_read_u32(child, "port", &port);
 			if (err)
 				continue;
-
+#if defined (CONFIG_UBNT_HDD_PWRCTL) || defined (CONFIG_UBNT_HDD_PWRCTL_V2)
+			err = of_property_read_u32(child, "fault-led", &hpriv->fault_led_gpio[port]);
+			if (err) {
+				dev_err(&pdev->dev, "failed to get fault-led %d\n", err);
+			}
+			if (err)
+				continue;
+#endif
 			err = of_get_named_gpio(child, "gpios", 0);
 			if (IS_ERR_VALUE(err))
 				continue;

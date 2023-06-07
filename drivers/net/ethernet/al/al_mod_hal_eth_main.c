@@ -4592,6 +4592,10 @@ static void al_mod_eth_board_params_set_scratch_regs(uint32_t **scratch_regs,
 
 	AL_REG_BIT_VAL_SET(reg, AL_HAL_ETH_AUTO_FEC_ENABLE_SHIFT, params->auto_fec_enable);
 
+	AL_REG_FIELD_SET(reg, AL_HAL_ETH_GPIO_SPD_1G_10G_MASK,
+			 AL_HAL_ETH_GPIO_SPD_1G_10G_SHIFT,
+			 params->gpio_spd_1g);
+
 	if (params->gpio_spd_10g != GPIO_SPD_NOT_AVAILABLE)
 		AL_REG_FIELD_SET(reg, AL_HAL_ETH_GPIO_SPD_1G_10G_MASK,
 				 AL_HAL_ETH_GPIO_SPD_1G_10G_SHIFT,
@@ -4798,6 +4802,10 @@ static int al_mod_eth_board_params_get_scratch_regs(uint32_t **scratch_regs,
 		params->auto_fec_enable = AL_TRUE;
 	else
 		params->auto_fec_enable = AL_FALSE;
+
+	params->gpio_spd_1g = AL_REG_FIELD_GET(reg,
+					AL_HAL_ETH_GPIO_SPD_1G_10G_MASK,
+					AL_HAL_ETH_GPIO_SPD_1G_10G_SHIFT);
 
 	params->gpio_spd_10g = AL_REG_FIELD_GET(reg,
 					AL_HAL_ETH_GPIO_SPD_1G_10G_MASK,

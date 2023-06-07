@@ -359,6 +359,42 @@ extern rtk_api_ret_t rtk_led_groupAbility_set(rtk_led_group_t group, rtk_led_abi
 extern rtk_api_ret_t rtk_led_groupAbility_get(rtk_led_group_t group, rtk_led_ability_t *pAbility);
 
 /* Function Name:
+ *      rtk_led_serialShiftSequenceMask_set
+ * Description:
+ *      Set LED serial shift sequence mask
+ * Input:
+ *      mask - LED shift mask.
+ * Output:
+ *      None
+ * Return:
+ *      RT_ERR_OK           - OK
+ *      RT_ERR_FAILED       - Failed
+ *      RT_ERR_SMI          - SMI access error
+ *      RT_ERR_INPUT        - Invalid input parameters.
+ * Note:
+ *      The API can set LED serial shift sequence mask.
+ */
+extern rtk_api_ret_t rtk_led_serialShiftSequenceMask_set(rtk_uint32 mask);
+
+/* Function Name:
+ *      rtk_led_serialShiftSequenceMask_get
+ * Description:
+ *      Get LED serial shift sequence mask
+ * Input:
+ *      None
+ * Output:
+ *      mask - LED shift mask.
+ * Return:
+ *      RT_ERR_OK           - OK
+ *      RT_ERR_FAILED       - Failed
+ *      RT_ERR_SMI          - SMI access error
+ *      RT_ERR_INPUT        - Invalid input parameters.
+ * Note:
+ *      The API can get LED serial shift sequence mask.
+ */
+extern rtk_api_ret_t rtk_led_serialShiftSequenceMask_get(rtk_uint32 *mask);
+
+/* Function Name:
  *      rtk_led_serialMode_set
  * Description:
  *      Set Led serial mode active congiuration

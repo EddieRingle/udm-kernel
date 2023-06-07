@@ -756,6 +756,20 @@ config LEDS_NIC78BX
 	  To compile this driver as a module, choose M here: the module
 	  will be called leds-nic78bx.
 
+config LEDS_ULOGO
+	tristate "LED Support ulogo LEDs"
+	depends on LEDS_TRIGGER_EXTERNAL
+	help
+	  This module controls ulogo b/w leds by patterm sysfs entry.
+
+config LEDS_ULOGO_PATTERN_MAX
+	int "Maximum number of ulogo pattern"
+	range 16 256
+	default 16
+	depends on LEDS_ULOGO
+	help
+	  Define the maximun number of ulogo pattern.
+
 comment "LED Triggers"
 source "drivers/leds/trigger/Kconfig"
 

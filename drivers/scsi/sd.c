@@ -124,6 +124,9 @@ static void sd_print_sense_hdr(struct scsi_disk *, struct scsi_sense_hdr *);
 static void sd_print_result(const struct scsi_disk *, const char *, int);
 
 static DEFINE_IDA(sd_index_ida);
+static DEFINE_IDA(osd_index_ida);
+static DEFINE_IDA(isd_index_ida);
+static DEFINE_IDA(boot_index_ida);
 
 /* This semaphore is used to mediate the 0->1 reference get in the
  * face of object destruction (i.e. we can't allow a get on an
@@ -3379,6 +3382,136 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 	put_device(&sdkp->dev);
 }
 
+#ifdef CONFIG_UBNT_FIXED_SD_NAME
+
+#define BLKTYPE_DISK  0x1
+#define BLKTYPE_ISCSI 0x2
+#define BLKTYPE_OTHER 0x3
+#define BLKTYPE_BOOT  0x4
+
+static int boot_carrier = -1;
+
+static void ubnt_init(void)
+{
+	char const* ptn = "boot_carrier=";
+	char *p = strstr(boot_command_line, ptn);
+	char *q = NULL;
+	char arg[4] = {""};
+	int len = 0;
+	if (p == NULL)
+		goto out_unknown;
+	p += strlen(ptn);
+	q = strchr(p, ' ');
+	if (q == NULL)
+		len = strlen(p);
+	else
+		len = q - p;
+	if (len > 3)
+		len = 3;
+
+	strncpy(arg, p, len);
+
+	if (kstrtoint(arg, 10, &boot_carrier) != 0) {
+		printk(KERN_ERR "Failed to parse %s to int\n", arg);
+		boot_carrier = -1;
+	}
+	printk(KERN_DEBUG "[DEBUG] boot_carrier = %d\n", boot_carrier);
+	goto done;
+out_unknown:
+	printk(KERN_INFO "no boot_target specified, use default policy\n");
+done:
+	return;
+}
+
+static int ubnt_get_sd_type(struct scsi_device* sdp)
+{
+	struct Scsi_Host * host = sdp->host;
+	if (0 == strncmp("Generic", sdp->vendor, 7)) {
+		// emmc or sdcard
+		if (host->host_no == boot_carrier || boot_carrier == -1) {
+			printk(KERN_DEBUG "Use host(%d) as boot carrier\n", host->host_no);
+			// in case of new model, we pray that emmc present first
+			boot_carrier = host->host_no;
+			return BLKTYPE_BOOT;
+		} else {
+			return BLKTYPE_OTHER;
+		}
+	}
+	if (0 == strncmp("iSCSI", host->hostt->name, 5)) {
+		return BLKTYPE_ISCSI;
+	}
+	if (0 == strncmp("USB", sdp->vendor, 3)) {
+		// usb device
+		return BLKTYPE_OTHER;
+	}
+	if (host->host_no < 8 && sdp->id == 0) {
+		return BLKTYPE_DISK;
+	}
+	return BLKTYPE_OTHER;
+}
+
+#define INDEX_OFFSET_ISCSI 0x80
+#define INDEX_OFFSET_OTHER 0x10 // reserve 16 disks
+#define INDEX_OFFSET_BOOT  0xf0
+
+static int ubnt_gen_sd_index(struct scsi_device* sdp)
+{
+	struct ida *index_ida = NULL;
+	int type = ubnt_get_sd_type(sdp);
+	int index = -1;
+	int offset = 0;
+
+	if (type == BLKTYPE_DISK) {
+		index_ida = &sd_index_ida;
+	} else if (type == BLKTYPE_ISCSI) {
+		index_ida = &isd_index_ida;
+		offset = INDEX_OFFSET_ISCSI;
+	} else if (type == BLKTYPE_OTHER) {
+		index_ida = &osd_index_ida;
+		offset = INDEX_OFFSET_OTHER;
+	} else if (type == BLKTYPE_BOOT) {
+		index_ida = &boot_index_ida;
+		offset = INDEX_OFFSET_BOOT;
+	} else {
+		// raise
+		goto out;
+	}
+
+	index = ida_alloc(index_ida, GFP_KERNEL);
+	if (index < 0)
+		goto out;
+	index += offset;
+out:
+	return index;
+}
+
+static void ubnt_put_sd_index(struct scsi_device* sdp, int index)
+{
+	// struct Scsi_Host *host = sdp->host;
+	struct ida *index_ida = NULL;
+	int type = ubnt_get_sd_type(sdp);
+	int offset = 0;
+
+	if (type == BLKTYPE_DISK) {
+		index_ida = &sd_index_ida;
+	} else if (type == BLKTYPE_ISCSI) {
+		index_ida = &isd_index_ida;
+		offset = INDEX_OFFSET_ISCSI;
+	} else if (type == BLKTYPE_OTHER) {
+		index_ida = &osd_index_ida;
+		offset = INDEX_OFFSET_OTHER;
+	} else if (type == BLKTYPE_BOOT) {
+		index_ida = &boot_index_ida;
+		offset = INDEX_OFFSET_BOOT;
+	} else {
+		return;
+	}
+
+	ida_free(index_ida, index - offset);
+}
+
+#endif // CONFIG_UBNT_FIXED_SD_NAME
+
 /**
  *	sd_probe - called during driver initialization and whenever a
  *	new scsi device is attached to the system. It is called once
@@ -3404,6 +3537,9 @@ static int sd_probe(struct device *dev)
 	struct gendisk *gd;
 	int index;
 	int error;
+#ifdef CONFIG_UBNT_FIXED_SD_NAME
+	int type = ubnt_get_sd_type(sdp);
+#endif // CONFIG_UBNT_FIXED_SD_NAME
 
 	scsi_autopm_get_device(sdp);
 	error = -ENODEV;
@@ -3429,6 +3565,25 @@ static int sd_probe(struct device *dev)
 	if (!gd)
 		goto out_free;
 
+#ifdef CONFIG_UBNT_FIXED_SD_NAME
+	index = ubnt_gen_sd_index(sdp);
+	if (index == -1)
+		goto out_put;
+
+	if (type == BLKTYPE_BOOT) {
+		if (index == INDEX_OFFSET_BOOT) {
+			memcpy(gd->disk_name, "boot", 5);
+			error = 0;
+		} else {
+			error = sd_format_disk_name("bsd", index - INDEX_OFFSET_BOOT, gd->disk_name, DISK_NAME_LEN);
+		}
+	} else if (type == BLKTYPE_ISCSI) {
+		error = sd_format_disk_name("isd", index - INDEX_OFFSET_ISCSI, gd->disk_name, DISK_NAME_LEN);
+	} else {
+		error = sd_format_disk_name("sd", index, gd->disk_name, DISK_NAME_LEN);
+	}
+#else // CONFIG_UBNT_FIXED_SD_NAME
+
 	index = ida_alloc(&sd_index_ida, GFP_KERNEL);
 	if (index < 0) {
 		sdev_printk(KERN_WARNING, sdp, "sd_probe: memory exhausted.\n");
@@ -3438,20 +3593,21 @@ static int sd_probe(struct device *dev)
 #ifdef CONFIG_SCSI_UBNT_STATIC_BOOT_DEV
 	/*
 	 * Fix the disk name to "boot" if the host type is an usb storage and
-	 * the vendor name is "Generic " for Genesys GL3224E or "Generic-" for
-	 * Realtek RTS5315 (2nd source).
+	 * the vendor name is "Generic ".
 	 */
 	if (strcmp(sdp->host->hostt->proc_name, "usb-storage") == 0 &&
-		strncmp(sdp->vendor, "Generic", 7) == 0) {
+		strncmp(sdp->vendor, "Generic ", 8) == 0) {
 		strcpy(gd->disk_name, "boot");
+		error = 0;
 	} else
 #endif
 	{
 		error = sd_format_disk_name("sd", index, gd->disk_name, DISK_NAME_LEN);
-		if (error) {
-			sdev_printk(KERN_WARNING, sdp, "SCSI disk (sd) name length exceeded.\n");
-			goto out_free_index;
-		}
+	}
+#endif // CONFIG_UBNT_FIXED_SD_NAME
+	if (error) {
+		sdev_printk(KERN_WARNING, sdp, "SCSI disk (sd) name length exceeded.\n");
+		goto out_free_index;
 	}
 
 	sdkp->device = sdp;
@@ -3487,7 +3643,11 @@ static int sd_probe(struct device *dev)
 	return 0;
 
  out_free_index:
+#ifdef CONFIG_UBNT_FIXED_SD_NAME
+	ubnt_put_sd_index(sdp, index);
+#else // CONFIG_UBNT_FIXED_SD_NAME
 	ida_free(&sd_index_ida, index);
+#endif // CONFIG_UBNT_FIXED_SD_NAME
  out_put:
 	put_disk(gd);
  out_free:
@@ -3552,8 +3712,12 @@ static void scsi_disk_release(struct device *dev)
 	struct scsi_disk *sdkp = to_scsi_disk(dev);
 	struct gendisk *disk = sdkp->disk;
 	struct request_queue *q = disk->queue;
-
+#ifdef CONFIG_UBNT_FIXED_SD_NAME
+	struct scsi_device *sdp = sdkp->device;
+	ubnt_put_sd_index(sdp, sdkp->index);
+#else // CONFIG_UBNT_FIXED_SD_NAME
 	ida_free(&sd_index_ida, sdkp->index);
+#endif // CONFIG_UBNT_FIXED_SD_NAME
 
 	/*
 	 * Wait until all requests that are in progress have completed.
@@ -3757,6 +3921,9 @@ static int __init init_sd(void)
 	if (err)
 		goto err_out_driver;
 
+#ifdef CONFIG_UBNT_FIXED_SD_NAME
+	ubnt_init();
+#endif /* CONFIG_UBNT_FIXED_SD_NAME */
 	return 0;
 
 err_out_driver:

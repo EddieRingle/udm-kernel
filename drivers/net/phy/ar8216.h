@@ -17,7 +17,7 @@
 #ifndef __AR8216_H
 #define __AR8216_H
 
-#include "ubnt_acl.h"
+#include <linux/ubnt_acl.h>
 
 #define BITS(_s, _n)	(((1UL << (_n)) - 1) << _s)
 
@@ -456,6 +456,14 @@ typedef enum {
 	ACL_RULE_PART_CNT
 } ar8327_acl_rule_part_t;
 
+typedef enum {
+	PORT_MIRRORING_NONE = 0x00,
+	PORT_MIRRORING_MONITOR,
+	PORT_MIRRORING_RX,
+	PORT_MIRRORING_TX,
+	PORT_MIRRORING_FULL
+} ar8327_port_mirroring_t;
+
 struct ar8xxx_priv {
 	struct switch_dev dev;
 	struct mii_bus *mii_bus;
@@ -510,6 +518,7 @@ struct ar8xxx_priv {
 	int arl_age_time;
 
 	/* mirroring */
+	ar8327_port_mirroring_t port_mirroring[AR8X16_MAX_PORTS];
 	bool mirror_rx;
 	bool mirror_tx;
 	int source_port;
@@ -529,6 +538,8 @@ u32
 ar8xxx_rmw(struct ar8xxx_priv *priv, int reg, u32 mask, u32 val);
 int
 ar8xxx_sw_phy_write16(struct switch_dev *dev, int addr, u8 reg, u16 value);
+int
+ar8xxx_sw_phy_read16(struct switch_dev *dev, int addr, u8 reg, u16 *value);
 
 void
 ar8xxx_phy_dbg_read(struct ar8xxx_priv *priv, int phy_addr,

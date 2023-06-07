@@ -82,4 +82,19 @@ int al_mod_eth_lm_retimer_ds25_handle_init(
 	struct al_mod_eth_lm_retimer *handle,
 	const struct al_mod_eth_lm_retimer_params *params);
 
+/**
+ * Ethernet Link Management DS125 Retimer handle initialization
+ *
+ * @param handle
+ *  Ethernet Link Management Retimer handle
+ * @param params
+ *  Ethernet Link Management Retimer parameters
+ *
+ * @return
+ *  0 on success, errno otherwise
+ */
+int al_mod_eth_lm_retimer_ds125_handle_init(
+    struct al_mod_eth_lm_retimer *handle,
+    const struct al_mod_eth_lm_retimer_params *params);
+
 #endif /* __AL_ETH_LM_RETIMER_INTERNAL_H__ */

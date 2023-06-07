@@ -543,6 +543,34 @@ ret_t rtl8367c_getAsicLedOperationMode(rtk_uint32 *mode)
 }
 
 /*
+@func ret_t | rtl8367c_setAsicLedSerialShiftSequenceMask | Set LED serial shift sequence mask
+@parm rtk_uint32 | mask | LED shift sequence mask value.
+@rvalue RT_ERR_OK | Success.
+@rvalue RT_ERR_SMI | SMI access error.
+@rvalue RT_ERR_INPUT | Invalid input value.
+@comm
+    The API can set led serial shift sequence mask.
+ */
+ret_t rtl8367c_setAsicLedSerialShiftSequenceMask(rtk_uint32 mask)
+{
+	return rtl8367c_setAsicRegBits(RTL8367C_REG_SERIAL_LED_CTRL, RTL8367C_SERIAL_LED_SHIFT_SEQUENCE_MASK, mask);
+}
+
+/*
+@func ret_t | rtl8367c_getAsicLedSerialShiftSequenceMask | Get LED serial shift sequence mask
+@parm rtk_uint32* | mask | LED shift sequence mask value.
+@rvalue RT_ERR_OK | Success.
+@rvalue RT_ERR_SMI | SMI access error.
+@rvalue RT_ERR_INPUT | Invalid input value.
+@comm
+    The API can get led serial shift sequence mask.
+ */
+ret_t rtl8367c_getAsicLedSerialShiftSequenceMask(rtk_uint32 *mask)
+{
+	return rtl8367c_getAsicRegBits(RTL8367C_REG_SERIAL_LED_CTRL, RTL8367C_SERIAL_LED_SHIFT_SEQUENCE_MASK, mask);
+}
+
+/*
 @func ret_t | rtl8367c_setAsicLedSerialModeConfig | Set LED serial mode
 @parm rtk_uint32 | active | Active High or Low.
 @rvalue RT_ERR_OK | Success.
@@ -571,9 +599,6 @@ ret_t rtl8367c_setAsicLedSerialModeConfig(rtk_uint32 active, rtk_uint32 serimode
 #ifdef UBNT_DEFAULT_SERIAL_SHIFTER_SETTINGS
 	/* output 8 ports data */
 	if ((retVal = rtl8367c_setAsicRegBit(RTL8367C_REG_LED_SYS_CONFIG, RTL8367C_LED_SERIAL_OUT_MODE_OFFSET, 1)) != RT_ERR_OK)
-		return retVal;
-	/* 10: Low port LED0->Low port LED1->Low port LED2->High port LED0->High port LED1->High port LED2 */
-	if ((retVal = rtl8367c_setAsicRegBits(RTL8367C_REG_SERIAL_LED_CTRL, RTL8367C_SERIAL_LED_SHIFT_SEQUENCE_MASK, 2)) != RT_ERR_OK)
 		return retVal;
 #else
 	/*set to 8G mode (not 16G mode)*/

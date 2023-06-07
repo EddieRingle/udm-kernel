@@ -37,6 +37,7 @@
 #include "rtl83xx_api/led.h"
 #include "rtl83xx_api/l2.h"
 #include "rtl83xx_api/igmp.h"
+#include "rtl83xx_api/mirror.h"
 
 #include "rtl8370.h"
 
@@ -667,6 +668,7 @@ static int rtl8370_led_init(struct rtl8370_priv *priv)
 	} else if (LED_PROFILE_SINGLE_STATE == priv->led_profile) {
 		serial_output = SERIAL_LED_0;
 		led_group[LED_GROUP_0] = LED_CONFIG_LINK_ACT;
+		led_group[LED_GROUP_1] = LED_CONFIG_LEDOFF;
 	} else {
 		serial_output = SERIAL_LED_NONE;
 		led_group[LED_GROUP_0] = LED_CONFIG_SPD10010ACT;
@@ -691,6 +693,16 @@ static int rtl8370_led_init(struct rtl8370_priv *priv)
 	if (RT_ERR_OK != rc) {
 		rtl_err(rc, "%s: Unable to set serial mode configuration", __func__);
 		return -ENODATA;
+	}
+
+	/* special case for "standard" LED mode (read: UDMPro), inverts led value on UDM-SE if used */
+	if (LED_PROFILE_DEFAULT_SERIAL == priv->led_profile) {
+		/* 10: Low port LED0->Low port LED1->Low port LED2->High port LED0->High port LED1->High port LED2 */
+		rc = rtk_led_serialShiftSequenceMask_set(2);
+		if (RT_ERR_OK != rc) {
+			rtl_err(rc, "%s: Unable to set serial shift sequence mask", __func__);
+			return -ENODATA;
+		}
 	}
 
 	return 0;
@@ -811,6 +823,70 @@ static int rtl8370_phy_init(struct rtl8370_priv *priv)
 			}
 		}
 	}
+	return 0;
+}
+
+static int rtk_setup_port_mirroring(struct rtl8370_priv *priv)
+{
+	int i;
+	static int skip_setting = 1;
+	int some_settings_found = 0;
+	int monitor_port = -1;
+	rtk_portmask_t rx;
+	rtk_portmask_t tx;
+
+	for (i = 0; i < RTL8370_PORT_MAX_PHY; i++) {
+		switch (priv->port_mirroring[i]) {
+		case (RTL_PORT_MIRRORING_NONE):
+			break;
+		case (RTL_PORT_MIRRORING_MONITOR):
+			monitor_port = i;
+		default:
+			some_settings_found = 1;
+		}
+	}
+	// optimisation to reduse MII traffic, since port mirroring is not
+	// that often used
+	if (some_settings_found == 0) {
+		if (skip_setting)
+			return 0;
+	}
+	skip_setting = 0;
+
+	RTK_PORTMASK_CLEAR(rx);
+	RTK_PORTMASK_CLEAR(tx);
+
+	for (i = 0; i < RTL8370_PORT_MAX_PHY; i++) {
+		switch (priv->port_mirroring[i]) {
+		case (RTL_PORT_MIRRORING_RX):
+			RTK_PORTMASK_PORT_SET(rx, _rtl_port_l2p(priv, i));
+			break;
+		case (RTL_PORT_MIRRORING_TX):
+			RTK_PORTMASK_PORT_SET(tx, _rtl_port_l2p(priv, i));
+			break;
+		case (RTL_PORT_MIRRORING_FULL):
+			RTK_PORTMASK_PORT_SET(rx, _rtl_port_l2p(priv, i));
+			RTK_PORTMASK_PORT_SET(tx, _rtl_port_l2p(priv, i));
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (monitor_port >= 0) {
+		rtk_mirror_portIso_set(ENABLED);
+		rtk_mirror_portBased_set(_rtl_port_l2p(priv, monitor_port), &rx, &tx);
+	} else {
+		rtk_mirror_portIso_set(DISABLED);
+		if (some_settings_found == 0) {
+			// disable port mirroring
+			for (i = 0; i < RTL8370_PORT_MAX_PHY; i++) {
+				rtk_mirror_portBased_set(_rtl_port_l2p(priv, i), &rx, &tx);
+			}
+			skip_setting = 1;
+		}
+	}
+
 	return 0;
 }
 
@@ -1619,6 +1695,94 @@ static int rtl8370_sw_set_port_pvid(struct switch_dev *dev, int port, int pvid)
 }
 
 /**
+ * @brief Reset all port mirroring functionality
+ */
+static int rtl8370_sw_disable_port_mirroring(struct switch_dev *dev,
+					const struct switch_attr *attr,
+					struct switch_val *val)
+{
+	struct rtl8370_priv *priv = sw_to_rtl8370(dev);
+	int i;
+
+	for (i = 0; i < RTL8370_PORT_MAX_PHY; i++)
+		priv->port_mirroring[i] = RTL_PORT_MIRRORING_NONE;
+	return 0;
+}
+
+static int rtl8370_sw_get_mirror(struct switch_dev *dev,
+				const struct switch_attr *attr,
+				struct switch_val *val)
+{
+	struct rtl8370_priv *priv = sw_to_rtl8370(dev);
+	int rc, port = val->port_vlan;
+	rtl8370_port_mirroring_t mstate;
+
+	if (port >= dev->ports)
+		return -EINVAL;
+
+	mstate = priv->port_mirroring[port];
+	switch (mstate) {
+	case (RTL_PORT_MIRRORING_NONE):
+		rc = snprintf(priv->buffer, sizeof(priv->buffer), "%s", "none");
+		break;
+	case (RTL_PORT_MIRRORING_MONITOR):
+		rc = snprintf(priv->buffer, sizeof(priv->buffer), "%s", "monitor");
+		break;
+	case (RTL_PORT_MIRRORING_RX):
+		rc = snprintf(priv->buffer, sizeof(priv->buffer), "%s", "rx");
+		break;
+	case (RTL_PORT_MIRRORING_TX):
+		rc = snprintf(priv->buffer, sizeof(priv->buffer), "%s", "tx");
+		break;
+	case (RTL_PORT_MIRRORING_FULL):
+		rc = snprintf(priv->buffer, sizeof(priv->buffer), "%s", "txrx");
+		break;
+	default:
+		rc = snprintf(priv->buffer, sizeof(priv->buffer), "unknown-%d", mstate);
+		break;
+	}
+	if (rc < 0)
+		return -ENOMEM;
+
+	val->value.s = priv->buffer;
+	val->len = rc;
+	return 0;
+}
+
+static int rtl8370_sw_set_mirror(struct switch_dev *dev,
+				const struct switch_attr *attr,
+				struct switch_val *val)
+{
+	struct rtl8370_priv *priv = sw_to_rtl8370(dev);
+	int port = val->port_vlan;
+	int i;
+
+	if (port >= dev->ports)
+		return -EINVAL;
+
+	if (!strcmp(val->value.s, "none")) {
+		priv->port_mirroring[port] = RTL_PORT_MIRRORING_NONE;
+	} else if (!strcmp(val->value.s, "rxtx") ||
+		   !strcmp(val->value.s, "txrx")) {
+		priv->port_mirroring[port] = RTL_PORT_MIRRORING_FULL;
+	} else if (!strcmp(val->value.s, "monitor")) {
+		for (i = 0; i < RTL8370_PORT_MAX_PHY; i++) {
+			if (priv->port_mirroring[port] == RTL_PORT_MIRRORING_MONITOR)
+				priv->port_mirroring[port] = RTL_PORT_MIRRORING_NONE;
+		}
+		priv->port_mirroring[port] = RTL_PORT_MIRRORING_MONITOR;
+	} else if (!strcmp(val->value.s, "rx")) {
+		priv->port_mirroring[port] = RTL_PORT_MIRRORING_RX;
+	} else if (!strcmp(val->value.s, "tx")) {
+		priv->port_mirroring[port] = RTL_PORT_MIRRORING_TX;
+	} else {
+		pr_err("port mirroring, unkown cmd: %s\n", val->value.s);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+/**
  * @brief Hard reset
  *
  * @param dev - switch control structure
@@ -1651,7 +1815,7 @@ static int rtl8370_sw_reset_switch(struct switch_dev *dev)
  * @brief Write data to PHY
  *
  * @param dev - switch control structure
- * @param addr - port number (physical)
+ * @param port - port number (physical)
  * @param reg - PHY register
  * @param value - data to write
  * @return int - error from errno.h, 0 on success
@@ -1673,23 +1837,61 @@ static int rtl8370_sw_phy_write16(struct switch_dev *dev, int port, uint8_t reg,
  * @brief Read data from PHY
  *
  * @param dev - switch control structure
- * @param addr - port number (physical)
+ * @param port - port number (physical)
  * @param reg - PHY register
- * @param value - data to store
+ * @param value - data to write
  * @return int - error from errno.h, 0 on success
  */
 static int rtl8370_sw_phy_read16(struct switch_dev *dev, int port, uint8_t reg, uint16_t *value)
 {
 	struct rtl8370_priv *priv = sw_to_rtl8370(dev);
-	rtk_port_phy_data_t val;
 	rtk_api_ret_t rc;
+	rtk_port_phy_data_t val;
 
 	rc = rtk_port_phyReg_get(_rtl_port_p2l(priv, port), reg, &val);
 	if (RT_ERR_OK != rc) {
-		rtl_err(rc, "%s: Unable to write into port's PHY register", __func__);
+		rtl_err(rc, "%s: Unable to read from port's PHY register", __func__);
 		return -ENODATA;
 	}
-	*value = (uint16_t)val;
+
+	*value = val & 0xFFFF;
+
+	return 0;
+}
+
+/**
+ * @brief Get flow control advertisement flags
+ */
+static inline int rtl8370_adv_flowctrl(struct switch_port_link *link,
+				       rtk_port_phy_ability_t *cap)
+{
+	if (!link || !cap)
+		return -EINVAL;
+
+	/* TODO - EOSN-2813
+	 * Once autoneg is off so is the flow control. The only solution is to force
+	 * the speed using rtk_port_macForceLink_set and with that, it's necessary to
+	 * force link status as well.
+	 *
+	 * The solution is to force MAC according to MII_BMCR register once the device
+	 * gets a link.
+	 */
+	if (!link->aneg && (link->tx_flow || link->rx_flow)) {
+		pr_warn("%s: flow control is automatically disabled when autoneg is off",
+			__func__);
+	}
+
+	cap->FC = DISABLED;
+	cap->AsyFC = DISABLED;
+
+	if (link->rx_flow) {
+		cap->FC = ENABLED;
+		cap->AsyFC = ENABLED;
+	}
+
+	if (link->tx_flow)
+		cap->AsyFC = (cap->AsyFC) ? DISABLED : ENABLED;
+
 	return 0;
 }
 
@@ -1701,59 +1903,88 @@ static int rtl8370_sw_phy_read16(struct switch_dev *dev, int port, uint8_t reg, 
  * @param link - switch port link structure
  * @return int - error from errno.h, 0 on success
  */
-static int rtl8370_sw_set_port_link(struct switch_dev *sw_dev, int port,
+static int rtl8370_sw_set_port_link(struct switch_dev *dev, int port,
 				    struct switch_port_link *link)
 {
-	struct rtl8370_priv *priv = sw_to_rtl8370(sw_dev);
-	rtk_port_mac_ability_t mac_status;
+	struct rtl8370_priv *priv = sw_to_rtl8370(dev);
+	rtk_port_phy_ability_t cap = { 0 };
 	rtk_api_ret_t rc;
+	uint16_t bmcr;
 
 	/* don't allow to control MAC of CPU ports */
 	if (_rtl_port_has_no_phy(priv, port)) {
 		return -ENOTSUPP;
 	}
 
-	/* Handle PHY */
-	if ((rc = switch_generic_set_link(sw_dev, port, link))) {
-		return rc;
-	}
-
-	/* Handle MAC */
-	memset(&mac_status, 0, sizeof(mac_status));
 #ifdef CONFIG_SWCONFIG_UBNT_EXT
 	if (!link->power_down)
 #endif
 	{
-		mac_status.link = PORT_LINKUP;
-		if (link->aneg) {
-			mac_status.nway = ENABLED;
-		} else {
-			switch (link->speed) {
-			case SWITCH_PORT_SPEED_10:
-				mac_status.speed = PORT_SPEED_10M;
-				break;
-			case SWITCH_PORT_SPEED_100:
-				mac_status.speed = PORT_SPEED_100M;
-				break;
-			case SWITCH_PORT_SPEED_1000:
-			default:
-				mac_status.speed = PORT_SPEED_1000M;
-				break;
-			}
-			mac_status.nway = DISABLED;
-			mac_status.duplex = link->duplex;
-			mac_status.txpause = link->tx_flow;
-			mac_status.rxpause = link->rx_flow;
+		if (!link->aneg && link->speed == SWITCH_PORT_SPEED_UNKNOWN)
+			return -ENOTSUPP;
+
+		switch (link->speed) {
+		case SWITCH_PORT_SPEED_10:
+			if (link->duplex)
+				cap.Full_10 = ENABLED;
+			else
+				cap.Half_10 = ENABLED;
+			break;
+		case SWITCH_PORT_SPEED_100:
+			if (link->duplex)
+				cap.Full_100 = ENABLED;
+			else
+				cap.Half_100 = ENABLED;
+			break;
+		case SWITCH_PORT_SPEED_1000:
+			cap.Full_1000 = ENABLED;
+			if (!link->duplex)
+				rtl_warn(
+					"%s: 1000baseT_Half is not supported by the chip, using full duplex instead.\n",
+					__func__);
+			break;
+		case SWITCH_PORT_SPEED_UNKNOWN:
+			/* Setting force mode affects PHY capabilities as well,
+			 * in order to advertise FULL capabilities, we need to
+			 * restore it.
+			 */
+			cap.Half_10 = ENABLED;
+			cap.Full_10 = ENABLED;
+			cap.Half_100 = ENABLED;
+			cap.Full_100 = ENABLED;
+			cap.Full_1000 = ENABLED;
+			break;
+		default:
+			return -ENOTSUPP;
+		}
+		cap.AutoNegotiation =
+			(link->aneg || link->speed >= SWITCH_PORT_SPEED_1000) ?
+				ENABLED : DISABLED;
+
+		rc = rtl8370_adv_flowctrl(link, &cap);
+		if (rc)
+			return rc;
+
+		rc = (cap.AutoNegotiation) ?
+			rtk_port_phyAutoNegoAbility_set(_rtl_port_p2l(priv, port), &cap) :
+			rtk_port_phyForceModeAbility_set(_rtl_port_p2l(priv, port), &cap);
+		if (RT_ERR_OK != rc) {
+			rtl_err(rc, "%s: Unable to force port's PHY capabilities",
+				__func__);
+			return -ENODATA;
 		}
 	}
 
-	rc = rtk_port_macForceLink_set(_rtl_port_p2l(priv, port), &mac_status);
-	if (RT_ERR_OK != rc) {
-		rtl_err(rc, "%s: Unable to set port's MAC register", __func__);
-		return -ENODATA;
-	}
+	/* Handle PDOWN */
+	rtl8370_sw_phy_read16(dev, port, MII_BMCR, &bmcr);
+#ifdef CONFIG_SWCONFIG_UBNT_EXT
+	if (link->power_down)
+		bmcr |= BMCR_PDOWN;
+	else
+#endif
+		bmcr &= ~BMCR_PDOWN;
 
-	return 0;
+	return rtl8370_sw_phy_write16(dev, port, MII_BMCR, bmcr);
 }
 
 /**
@@ -1768,43 +1999,33 @@ static int rtl8370_sw_get_port_link(struct switch_dev *dev, int port, struct swi
 {
 	struct rtl8370_priv *priv = sw_to_rtl8370(dev);
 	rtk_api_ret_t rc;
-	rtk_port_mac_ability_t mac_status;
+	rtk_port_mac_ability_t mac_status = {0};
 
 	if (port >= dev->ports) {
 		return -EINVAL;
 	}
 
-#ifdef CONFIG_SWCONFIG_UBNT_EXT
 	if (!_rtl_port_has_no_phy(priv, port)) {
-		rtk_port_phy_data_t phy_status;
-		rc = rtk_port_phyReg_get(_rtl_port_p2l(priv, port), MII_BMCR, &phy_status);
-		if (RT_ERR_OK != rc) {
-			rtl_err(rc, "%s: Unable to read port's PHY control register", __func__);
+		/* Read MII regs */
+		rc = switch_generic_get_link(dev, port, link);
+		if (rc) {
+			rtl_err(rc, "%s: Unable to read port's PHY status", __func__);
 			return -ENODATA;
 		}
-		link->power_down = !!(phy_status & BMCR_PDOWN);
 	} else {
-		link->power_down = 0;
+		/* No PHY - use MAC status */
+		rc = rtk_port_macStatus_get(_rtl_port_p2l(priv, port), &mac_status);
+		if (RT_ERR_OK != rc) {
+			rtl_err(rc, "%s: Unable to get port's MAC status.", __func__);
+			return -ENODATA;
+		}
+		link->link = (PORT_LINKUP == mac_status.link);
+		link->duplex = mac_status.duplex;
+		link->speed = rtl8370_tr_port_speed_switch(mac_status.speed);
+		link->rx_flow = mac_status.rxpause;
+		link->tx_flow = mac_status.txpause;
+		link->aneg = mac_status.nway;
 	}
-#endif
-
-	rc = rtk_port_macStatus_get(_rtl_port_p2l(priv, port), &mac_status);
-	if (RT_ERR_OK != rc) {
-		rtl_err(rc, "%s: Unable to get port's MAC status.", __func__);
-		return -ENODATA;
-	}
-
-	link->link = (PORT_LINKUP == mac_status.link);
-
-	if (!link->link) {
-		return 0;
-	}
-
-	link->duplex = mac_status.duplex;
-	link->speed = rtl8370_tr_port_speed_switch(mac_status.speed);
-	link->rx_flow = mac_status.rxpause;
-	link->tx_flow = mac_status.txpause;
-	link->aneg = mac_status.nway;
 
 	return 0;
 }
@@ -2641,6 +2862,10 @@ static int rtl8370_sw_hw_apply(struct switch_dev *dev)
 		return rc;
 	}
 
+	if ((rc = rtk_setup_port_mirroring(priv))) {
+		return rc;
+	}
+
 	rc = rtk_switch_soft_reset();
 	if (RT_ERR_OK != rc) {
 		rtl_err(rc, "%s: Failed to soft reset switch.", __func__);
@@ -2731,6 +2956,12 @@ static struct switch_attr rtl8370_globals[] = {
 		.get = rtl8370_sw_get_igmp_snooping,
 		.max = 1
 	},
+	{
+		.type = SWITCH_TYPE_NOVAL,
+		.name = "disable_port_mirror",
+		.description = "Disable port mirroring",
+		.set = rtl8370_sw_disable_port_mirroring,
+	},
 };
 
 /**
@@ -2774,6 +3005,13 @@ static struct switch_attr rtl8370_port[] = {
 		.max = RTK_EFID_MAX,
 		.set = rtl8370_sw_set_port_efid,
 		.get = rtl8370_sw_get_port_efid,
+	},
+	{
+		.type = SWITCH_TYPE_STRING,
+		.name = "mirror",
+		.description ="Get/Set a port mirring (none,tx,rx,txrx,monitor)",
+		.set = rtl8370_sw_set_mirror,
+		.get = rtl8370_sw_get_mirror,
 	},
 };
 

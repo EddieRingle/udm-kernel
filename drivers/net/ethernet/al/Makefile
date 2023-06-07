@@ -44,7 +44,7 @@ $(AL_ETH_DRIVER_NAME)-objs := al_eth.o al_mod_eth_sysfs.o kcompat.o\
 		   al_mod_hal_udma_config.o\
 		   al_mod_hal_serdes_hssp.o al_mod_hal_serdes_25g.o\
 		   al_mod_hal_pbs_utils.o al_mod_hal_unit_adapter.o al_mod_hal_iofic.o\
-		   al_mod_eth_lm_retimer_br210.o al_mod_eth_lm_retimer_ds25.o al_mod_eth_lm_retimer_br410.o\
+		   al_mod_eth_lm_retimer_br210.o al_mod_eth_lm_retimer_ds25.o al_mod_eth_lm_retimer_br410.o al_mod_eth_lm_retimer_ds125.o\
 		   al_mod_eth_lm_retimer.o al_mod_eth_v4_lm.o al_mod_init_eth_lm.o al_mod_init_eth_kr.o\
 		   al_mod_serdes.o\
 		   al_mod_err_events.o al_mod_err_events_common.o al_mod_err_events_eth.o\

@@ -46,7 +46,8 @@ enum switch_port_speed {
 	SWITCH_PORT_SPEED_10 = 10,
 	SWITCH_PORT_SPEED_100 = 100,
 	SWITCH_PORT_SPEED_1000 = 1000,
-	SWITCH_PORT_SPEED_2500 = 2500
+	SWITCH_PORT_SPEED_2500 = 2500,
+	SWITCH_PORT_SPEED_10000 = 10000,
 };
 
 struct switch_port_link {
@@ -61,6 +62,10 @@ struct switch_port_link {
 	enum switch_port_speed speed;
 	/* in ethtool adv_t format */
 	u32 eee;
+#ifdef CONFIG_SWCONFIG_ADV_MODE_SUPPORT
+	u32 adv;
+	u32 adv_lp;
+#endif /* CONFIG_SWCONFIG_ADV_MODE_SUPPORT */
 };
 
 struct switch_port_stats {
@@ -199,6 +204,9 @@ struct switch_attr {
 };
 
 int switch_generic_set_link(struct switch_dev *dev, int port,
+			    struct switch_port_link *link);
+
+int switch_generic_get_link(struct switch_dev *dev, int port,
 			    struct switch_port_link *link);
 
 #endif /* _LINUX_SWITCH_H */

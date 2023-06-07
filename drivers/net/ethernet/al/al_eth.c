@@ -907,6 +907,12 @@ static int al_mod_eth_board_of_led(struct al_mod_eth_adapter *adapter,  struct a
 	#define OF_NODE_NAME_LED_10G	"sfp_10g"
 	#define OF_PROP_NAME_LED_GPIOS	"gpios"
 
+	{
+		adapter->gpio_spd_1g = GPIO_SPD_NOT_AVAILABLE;
+		adapter->gpio_spd_10g = GPIO_SPD_NOT_AVAILABLE;
+		adapter->gpio_spd_25g = GPIO_SPD_NOT_AVAILABLE;
+	}
+
 	if (NULL == adapter || NULL == np || NULL == params) {
 		return -EINVAL;
 	}
@@ -917,7 +923,7 @@ static int al_mod_eth_board_of_led(struct al_mod_eth_adapter *adapter,  struct a
 	*/
 	np_leds = of_find_child_by_name(np, OF_NODE_NAME_LED_ROOT);
 	if (!np_leds) {
-		netdev_dbg(adapter->netdev, "Unable to find matching node (%s)\n", OF_NODE_NAME_LED_ROOT);
+		netdev_err(adapter->netdev, "Unable to find matching node (%s)\n", OF_NODE_NAME_LED_ROOT);
 		return -EINVAL;
 	}
 
@@ -1101,7 +1107,7 @@ static int al_mod_eth_board_params_init_nic(struct al_mod_eth_adapter *adapter)
 			AL_ETH_REF_FREQ_500_MHZ;
 	adapter->mdio_freq = AL_ETH_DEFAULT_MDIO_FREQ_KHZ;
 	adapter->link_config.active_duplex = (board_type == ALPINE_NIC) ? DUPLEX_HALF : DUPLEX_FULL;
-	adapter->link_config.autoneg = AUTONEG_DISABLE;
+	adapter->link_config.autoneg = AUTONEG_ENABLE;
 
 	switch (board_type) {
 	case ALPINE_NIC:
@@ -1272,10 +1278,14 @@ static int al_mod_eth_board_params_init_integrated(struct al_mod_eth_adapter *ad
 	case AL_ETH_BOARD_MEDIA_TYPE_SGMII:
 		adapter->mac_mode = AL_ETH_MAC_MODE_SGMII;
 		adapter->max_speed = AL_ETH_LM_MAX_SPEED_1G;
-		if (adapter->al_mod_chip_id <= PBS_UNIT_CHIP_ID_DEV_ID_ALPINE_V2)
-			adapter->use_lm = true;
-		else
+		if (adapter->al_mod_chip_id <= PBS_UNIT_CHIP_ID_DEV_ID_ALPINE_V2) {
+			if (adapter->link_config.force_1000_base_x)
+				adapter->use_lm = false;
+			else
+				adapter->use_lm = true;
+		} else {
 			adapter->use_lm = false;
+		}
 		break;
 	case AL_ETH_BOARD_MEDIA_TYPE_SGMII_2_5G:
 		adapter->mac_mode = AL_ETH_MAC_MODE_SGMII_2_5G;
@@ -1284,15 +1294,28 @@ static int al_mod_eth_board_params_init_integrated(struct al_mod_eth_adapter *ad
 	case AL_ETH_BOARD_MEDIA_TYPE_10GBASE_SR:
 		adapter->mac_mode = AL_ETH_MAC_MODE_10GbE_Serial;
 		adapter->max_speed = AL_ETH_LM_MAX_SPEED_10G;
-		adapter->use_lm = true;
+		if (adapter->al_mod_chip_id <= PBS_UNIT_CHIP_ID_DEV_ID_ALPINE_V2) {
+			if (adapter->link_config.force_1000_base_x)
+				adapter->use_lm = false;
+			else
+				adapter->use_lm = true;
+		} else {
+			adapter->use_lm = true;
+		}
 		break;
 	case AL_ETH_BOARD_MEDIA_TYPE_AUTO_DETECT:
+#ifndef CONFIG_ALPINE_MDIO_BUS_SHARING
+		adapter->mac_mode = AL_ETH_MAC_MODE_10GbE_Serial;
+#endif
 		adapter->sfp_detection_needed = AL_TRUE;
 		adapter->max_speed = AL_ETH_LM_MAX_SPEED_10G;
 		adapter->auto_speed = false;
 		adapter->use_lm = true;
 		break;
 	case AL_ETH_BOARD_MEDIA_TYPE_AUTO_DETECT_AUTO_SPEED:
+#ifndef CONFIG_ALPINE_MDIO_BUS_SHARING
+		adapter->mac_mode = AL_ETH_MAC_MODE_10GbE_Serial;
+#endif
 		adapter->sfp_detection_needed = AL_TRUE;
 		adapter->max_speed = AL_ETH_LM_MAX_SPEED_10G;
 		adapter->auto_speed = true;
@@ -1874,6 +1897,7 @@ static void al_mod_eth_user_def_rx_icrc_backup(struct al_mod_eth_adapter *adapte
 	}
 }
 
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 static int al_mod_eth_hw_init(struct al_mod_eth_adapter *adapter)
 {
 	int rc;
@@ -1945,6 +1969,94 @@ static int al_mod_eth_hw_init(struct al_mod_eth_adapter *adapter)
 #endif /* AL_ETH_PLAT_EMU */
 	return rc;
 }
+#else
+static int al_mod_eth_hw_init(struct al_mod_eth_adapter *adapter)
+{
+	int rc;
+#ifndef AL_ETH_PLAT_EMU
+	enum al_mod_eth_mdio_type mdio_type;
+#endif
+
+	netdev_dbg(adapter->netdev, "Init adapter\n");
+	rc = al_mod_eth_hw_init_adapter(adapter);
+	if (rc)
+		return rc;
+
+	if (adapter->rev_id == AL_ETH_REV_ID_3) {
+		al_mod_eth_tx_icrc_hw_offload_enable(adapter, AL_ETH_TX_GENERIC_CRC_ENTRIES_NUM);
+		al_mod_eth_user_def_rx_icrc_backup(adapter, AL_ETH_USER_DEF_RESTORE);
+	}
+
+	/**
+	 * In NIC mode, don't do mac_config for 25g ports to prevent reset of FEC settings
+	 * since the FW does mac_config once on init. For 1g ports in NIC mode, the FW
+	 * doesn't do mac_config, so the driver needs to do it
+	 * this function must be called after FLR !!
+	 **/
+	if ((adapter->board_type == ALPINE_NIC_V2_1G_TEST) ||
+	    (adapter->board_type == ALPINE_NIC_V3_1G_TEST) ||
+	    !IS_NIC(adapter->board_type)) {
+		if (adapter->mac_started) {
+			netdev_dbg(adapter->netdev, "mac mode set\n");
+			rc = al_mod_eth_mac_mode_set(&adapter->hal_adapter,
+						 adapter->mac_mode);
+		} else {
+			netdev_dbg(adapter->netdev, "mac config\n");
+			rc = al_mod_eth_mac_config(&adapter->hal_adapter,
+					       adapter->mac_mode);
+		}
+		if (rc < 0) {
+			netdev_err(adapter->netdev, "%s failed to configure mac!\n", __func__);
+			return rc;
+		}
+	} else {
+		al_mod_eth_mac_mode_set(&adapter->hal_adapter, adapter->mac_mode);
+	}
+
+       if (((adapter->mac_mode == AL_ETH_MAC_MODE_SGMII) && (adapter->phy_exist == AL_FALSE)) ||
+		(adapter->mac_mode == AL_ETH_MAC_MODE_RGMII && adapter->phy_exist == AL_FALSE)) {
+		netdev_err(adapter->netdev, "link config (0x%x)\n", adapter->mac_mode);
+
+		rc = al_mod_eth_mac_link_config(&adapter->hal_adapter,
+			adapter->link_config.force_1000_base_x,
+			adapter->link_config.autoneg,
+			adapter->link_config.active_speed,
+			adapter->link_config.active_duplex);
+		if (rc) {
+			netdev_err(adapter->netdev,
+				"%s failed to configure link parameters!\n", __func__);
+			return rc;
+		}
+	}
+
+#ifndef AL_ETH_PLAT_EMU
+	if (adapter->phy_exist) {
+		netdev_dbg(adapter->netdev, "mdio config\n");
+		if (adapter->phy_if == AL_ETH_BOARD_PHY_IF_XMDIO) {
+#ifndef CONFIG_ARCH_ALPINE
+			/** Host driver doesnt support xmdio */
+			return -EOPNOTSUPP;
+#else
+			mdio_type = AL_ETH_MDIO_TYPE_CLAUSE_45;
+#endif
+		} else
+			mdio_type = AL_ETH_MDIO_TYPE_CLAUSE_22;
+
+		rc = al_mod_eth_mdio_config(&adapter->hal_adapter, mdio_type,
+			AL_TRUE/*shared_mdio_if*/,
+			adapter->ref_clk_freq, adapter->mdio_freq);
+		if (rc) {
+			netdev_err(adapter->netdev, "%s failed at mdio config!\n", __func__);
+			return rc;
+		}
+	}
+
+	netdev_dbg(adapter->netdev, "flow ctrl config\n");
+	al_mod_eth_flow_ctrl_init(adapter);
+#endif /* AL_ETH_PLAT_EMU */
+	return rc;
+}
+#endif
 
 static int al_mod_eth_mac_tx_stop(struct al_mod_eth_adapter *adapter)
 {
@@ -3396,6 +3508,7 @@ al_mod_eth_config_rx_fwd_adv(struct al_mod_eth_adapter *adapter)
 
 #ifdef CONFIG_PHYLIB
 /* MDIO */
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 static int al_mod_mdio_read(struct mii_bus *bp, int mii_id, int reg)
 {
 	struct al_mod_eth_adapter *adapter;
@@ -3742,6 +3855,216 @@ error:
 	}
 	return -ENODEV;
 }
+#else
+static int al_mod_mdio_read(struct mii_bus *bp, int mii_id, int reg)
+{
+	struct al_mod_eth_adapter *adapter = bp->priv;
+	u16 value = 0;
+	int rc;
+	int timeout = MDIO_TIMEOUT_MSEC;
+
+	while (timeout > 0) {
+		if (reg & MII_ADDR_C45) {
+			/** Clause 45 */
+			al_mod_dbg("%s [c45]: dev %x reg %x val %x\n",
+				__func__,
+				((reg & AL_ETH_MDIO_C45_DEV_MASK) >> AL_ETH_MDIO_C45_DEV_SHIFT),
+				(reg & AL_ETH_MDIO_C45_REG_MASK), value);
+			rc = al_mod_eth_mdio_read(&adapter->hal_adapter, adapter->phy_addr,
+				((reg & AL_ETH_MDIO_C45_DEV_MASK) >> AL_ETH_MDIO_C45_DEV_SHIFT),
+				(reg & AL_ETH_MDIO_C45_REG_MASK), &value);
+		} else {
+			/** Clause 22 */
+			rc = al_mod_eth_mdio_read(&adapter->hal_adapter, adapter->phy_addr,
+					      MDIO_DEVAD_NONE, reg, &value);
+		}
+
+		if (rc == 0)
+			return value;
+
+		netdev_dbg(adapter->netdev,
+			   "mdio read failed. try again in 10 msec\n");
+
+		timeout -= 10;
+		msleep(10);
+	}
+
+	if (rc)
+		netdev_err(adapter->netdev, "MDIO read failed on timeout\n");
+
+	return value;
+}
+
+static int
+al_mod_mdio_write(struct mii_bus *bp, int mii_id, int reg, u16 val)
+{
+	struct al_mod_eth_adapter *adapter = bp->priv;
+	int rc;
+	int timeout = MDIO_TIMEOUT_MSEC;
+
+	while (timeout > 0) {
+		if (reg & MII_ADDR_C45) {
+			al_mod_dbg("%s [c45]: device %x reg %x val %x\n",
+				__func__,
+				((reg & AL_ETH_MDIO_C45_DEV_MASK) >> AL_ETH_MDIO_C45_DEV_SHIFT),
+				(reg & AL_ETH_MDIO_C45_REG_MASK), val);
+			rc = al_mod_eth_mdio_write(&adapter->hal_adapter, adapter->phy_addr,
+				((reg & AL_ETH_MDIO_C45_DEV_MASK) >> AL_ETH_MDIO_C45_DEV_SHIFT),
+				(reg & AL_ETH_MDIO_C45_REG_MASK), val);
+		} else {
+			rc = al_mod_eth_mdio_write(&adapter->hal_adapter, adapter->phy_addr,
+				       MDIO_DEVAD_NONE, reg, val);
+		}
+
+		if (rc == 0)
+			return 0;
+
+		netdev_err(adapter->netdev,
+			   "mdio write failed. try again in 10 msec\n");
+
+		timeout -= 10;
+		msleep(10);
+	}
+
+
+	if (rc)
+		netdev_err(adapter->netdev, "MDIO write failed on timeout\n");
+
+	return rc;
+}
+
+/**
+ * al_mod_eth_mdiobus_teardown - mdiobus unregister
+ *
+ *
+ **/
+static void al_mod_eth_mdiobus_teardown(struct al_mod_eth_adapter *adapter)
+{
+	if (!adapter->mdio_bus)
+		return;
+
+	mdiobus_unregister(adapter->mdio_bus);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+	kfree(adapter->mdio_bus->irq);
+#endif
+	mdiobus_free(adapter->mdio_bus);
+	adapter->mdio_bus = NULL;
+}
+
+/**
+ * al_mod_eth_mdiobus_setup - initialize mdiobus and register to kernel
+ *
+ *
+ **/
+static int al_mod_eth_mdiobus_setup(struct al_mod_eth_adapter *adapter)
+{
+	struct phy_device *phydev;
+	int i;
+	int ret;
+
+	adapter->mdio_bus = mdiobus_alloc();
+	if (adapter->mdio_bus == NULL)
+		return -ENOMEM;
+
+	adapter->mdio_bus->name     = "al mdio bus";
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 26)
+	adapter->mdio_bus->id = (adapter->pdev->bus->number << 8) | adapter->pdev->devfn;
+#else
+	snprintf(adapter->mdio_bus->id, MII_BUS_ID_SIZE, "%x",
+		 (adapter->pdev->bus->number << 8) | adapter->pdev->devfn);
+#endif
+	adapter->mdio_bus->priv     = adapter;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
+	adapter->mdio_bus->dev = &adapter->pdev->dev;
+#else
+	adapter->mdio_bus->parent   = &adapter->pdev->dev;
+#endif
+	adapter->mdio_bus->read     = &al_mod_mdio_read;
+	adapter->mdio_bus->write    = &al_mod_mdio_write;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+	adapter->mdio_bus->irq = kmalloc(sizeof(int) * PHY_MAX_ADDR, GFP_KERNEL);
+
+	if (!adapter->mdio_bus->irq) {
+		mdiobus_free(adapter->mdio_bus);
+		return -ENOMEM;
+	}
+
+	/* Initialise the interrupts to polling */
+	for (i = 0; i < PHY_MAX_ADDR; i++)
+		adapter->mdio_bus->irq[i] = PHY_POLL;
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0) */
+
+	if (adapter->phy_if == AL_ETH_BOARD_PHY_IF_XMDIO) {
+#if defined(CONFIG_ARCH_ALPINE)
+		/** XMDIO is not supported on host driver due to kernel 3.2 compatability issue */
+
+		/**
+		 * Mask out all the devices from auto probing
+		 * (we get device address from board params)
+		 */
+		adapter->mdio_bus->phy_mask = 0xffffffff;
+		i = mdiobus_register(adapter->mdio_bus);
+		if (i) {
+			netdev_warn(adapter->netdev, "mdiobus_reg failed (0x%x)\n", i);
+			mdiobus_free(adapter->mdio_bus);
+			return i;
+		}
+
+		phydev = get_phy_device(adapter->mdio_bus, adapter->phy_addr, true);
+		if (!phydev) {
+			netdev_err(adapter->netdev, "%s: phy device get failed\n", __func__);
+			goto error;
+		}
+
+		ret = phy_device_register(phydev);
+		if (ret) {
+			netdev_err(adapter->netdev, "%s: phy device register failed\n", __func__);
+			goto error_xmdio_phy;
+		}
+#else
+		ret = -EOPNOTSUPP;
+		return ret;
+#endif
+	} else {
+		adapter->mdio_bus->phy_mask = ~(1 << adapter->phy_addr);
+		i = mdiobus_register(adapter->mdio_bus);
+		if (i) {
+			netdev_warn(adapter->netdev, "mdiobus_reg failed (0x%x)\n", i);
+			mdiobus_free(adapter->mdio_bus);
+			return i;
+		}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+		phydev = mdiobus_get_phy(adapter->mdio_bus, adapter->phy_addr);
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0) */
+		phydev = adapter->mdio_bus->phy_map[adapter->phy_addr];
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0) */
+	}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+	if (!phydev) {
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0) */
+	if (!phydev || !phydev->drv) {
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0) */
+		netdev_err(adapter->netdev, "%s: phy device get failed\n", __func__);
+		goto error;
+	}
+
+	return 0;
+
+#if defined(CONFIG_ARCH_ALPINE)
+error_xmdio_phy:
+	phy_device_free(phydev);
+#endif
+error:
+	netdev_warn(adapter->netdev, "No PHY devices\n");
+	mdiobus_unregister(adapter->mdio_bus);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+	kfree(adapter->mdio_bus->irq);
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0) */
+	mdiobus_free(adapter->mdio_bus);
+	return -ENODEV;
+}
+#endif
 
 static void al_mod_eth_adjust_link(struct net_device *dev)
 {
@@ -3758,6 +4081,11 @@ static void al_mod_eth_adjust_link(struct net_device *dev)
 			link_config->active_duplex = phydev->duplex;
 		}
 
+		if (phydev->autoneg != link_config->autoneg) {
+			new_state = 1;
+			link_config->autoneg = phydev->autoneg;
+		}
+
 		if (phydev->speed != link_config->active_speed) {
 			new_state = 1;
 			switch (phydev->speed) {
@@ -3766,14 +4094,26 @@ static void al_mod_eth_adjust_link(struct net_device *dev)
 			case SPEED_10:
 				if (adapter->mac_mode == AL_ETH_MAC_MODE_RGMII)
 					mac_mode_needed = AL_ETH_MAC_MODE_RGMII;
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 				else
 					mac_mode_needed = AL_ETH_MAC_MODE_SGMII;
+#else
+				else {
+					if (adapter->mac_mode == AL_ETH_MAC_MODE_SGMII)
+						mac_mode_needed = AL_ETH_MAC_MODE_SGMII;
+					else
+						mac_mode_needed = AL_ETH_MAC_MODE_10GbE_Serial;
+				}
+#endif
 				break;
 			case SPEED_10000:
 			case SPEED_2500:
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 				if (adapter->mac_mode == AL_ETH_MAC_MODE_SGMII_2_5G) {
 					mac_mode_needed = AL_ETH_MAC_MODE_SGMII_2_5G;
-				} else {
+				} else
+#endif
+				{
 					mac_mode_needed = AL_ETH_MAC_MODE_10GbE_Serial;
 				}
 				break;
@@ -3819,8 +4159,9 @@ static void al_mod_eth_adjust_link(struct net_device *dev)
 			if (adapter->mac_mode != AL_ETH_MAC_MODE_10GbE_Serial &&
 				adapter->mac_mode != AL_ETH_MAC_MODE_SGMII_2_5G) {
 
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 				al_mod_eth_mdio_lock(adapter->mdio_bus);
-
+#endif
 				/* change the MAC link configuration */
 				rc = al_mod_eth_mac_link_config(&adapter->hal_adapter,
 						force_1000_base_x,
@@ -3831,9 +4172,9 @@ static void al_mod_eth_adjust_link(struct net_device *dev)
 					netdev_warn(adapter->netdev,
 					"Failed to config the mac with the new link settings!");
 				}
-
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 				al_mod_eth_mdio_unlock(adapter->mdio_bus);
-
+#endif
 			}
 		}
 
@@ -3858,6 +4199,7 @@ static void al_mod_eth_adjust_link(struct net_device *dev)
 		phy_print_status(phydev);
 }
 
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 static int al_mod_eth_phy_init(struct al_mod_eth_adapter *adapter)
 {
 	struct phy_device *phydev;
@@ -3927,6 +4269,89 @@ static int al_mod_eth_phy_init(struct al_mod_eth_adapter *adapter)
 
 	return 0;
 }
+#else
+static int al_mod_eth_phy_init(struct al_mod_eth_adapter *adapter)
+{
+	struct phy_device *phydev;
+	phy_interface_t interface;
+
+	switch (adapter->mac_mode) {
+	case AL_ETH_MAC_MODE_SGMII:
+		interface = PHY_INTERFACE_MODE_SGMII;
+		break;
+	case AL_ETH_MAC_MODE_RGMII:
+		interface = PHY_INTERFACE_MODE_RGMII_ID;
+		break;
+	case AL_ETH_MAC_MODE_10GbE_Serial:
+		interface = PHY_INTERFACE_MODE_10GBASER;
+		break;
+	default:
+		netdev_err(adapter->netdev,
+			   "phy mode not supported for mac_mode %d\n",
+			   adapter->mac_mode);
+		return -EINVAL;
+	}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+	phydev = mdiobus_get_phy(adapter->mdio_bus, adapter->phy_addr);
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0) */
+	phydev = adapter->mdio_bus->phy_map[adapter->phy_addr];
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0) */
+
+	adapter->link_config.old_link = 0;
+	adapter->link_config.active_duplex = DUPLEX_UNKNOWN;
+	adapter->link_config.active_speed = SPEED_UNKNOWN;
+
+	/* Attach the MAC to the PHY. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+	phydev = phy_connect(adapter->netdev, phydev_name(phydev), al_mod_eth_adjust_link,
+			     interface);
+#elif LINUX_VERSION_CODE > KERNEL_VERSION(3, 9, 0)
+	phydev = phy_connect(adapter->netdev, dev_name(&phydev->dev), al_mod_eth_adjust_link,
+		interface);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,20)
+	phydev = phy_connect(adapter->netdev, dev_name(&phydev->dev), al_mod_eth_adjust_link,
+			     0, interface);
+#else
+	phydev = phy_connect(adapter->netdev, dev_name(&phydev->dev), al_mod_eth_adjust_link, 0);
+#endif
+	if (IS_ERR(phydev)) {
+		netdev_err(adapter->netdev, "Could not attach to PHY\n");
+		return PTR_ERR(phydev);
+	}
+
+	netdev_info(adapter->netdev, "phy[%d]: device %s, driver %s\n",
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+		    phydev->mdio.addr,
+		    phydev_name(phydev),
+#else
+		    phydev->addr,
+		    dev_name(&phydev->dev),
+#endif
+		    phydev->drv ? phydev->drv->name : "unknown");
+
+	/* Mask with MAC supported features. */
+	phydev->supported &= (PHY_GBIT_FEATURES |
+		SUPPORTED_Pause |
+		SUPPORTED_Asym_Pause);
+
+	phydev->advertising = phydev->supported;
+
+	netdev_info(adapter->netdev, "phy[%d]:supported %x adv %x\n",
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+		    phydev->mdio.addr,
+#else
+		    phydev->addr,
+#endif
+		    phydev->supported,
+		    phydev->advertising);
+
+	adapter->phydev = phydev;
+	/* Bring the PHY up */
+	phy_start(adapter->phydev);
+
+	return 0;
+}
+#endif
 #endif /* CONFIG_PHYLIB */
 
 static int al_mod_eth_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
@@ -3937,9 +4362,6 @@ static int al_mod_eth_ioctl(struct net_device *netdev, struct ifreq *ifr, int cm
 
 	if (adapter->phy_exist == false)
 		return -EOPNOTSUPP;
-
-	netdev_dbg(adapter->netdev, "ioctl: phy id 0x%x, reg 0x%x, val_in 0x%x\n",
-			mdio->phy_id, mdio->reg_num, mdio->val_in);
 
 	if (adapter->mdio_bus && adapter->phydev)
 		return phy_mii_ioctl(adapter->phydev, ifr, cmd);
@@ -3979,6 +4401,7 @@ static void al_mod_eth_reset_task(struct work_struct *work)
 	if (rc < 0)
 		return;
 	al_mod_eth_down(adapter);
+	mdelay(10);
 	al_mod_eth_up(adapter);
 	rtnl_unlock();
 }
@@ -6080,8 +6503,9 @@ static int al_mod_eth_up(struct al_mod_eth_adapter *adapter)
 	int rc;
 
 	netdev_dbg(adapter->netdev, "%s\n", __func__);
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 	al_mod_eth_mdio_lock(adapter->mdio_bus);
-
+#endif
 	if (adapter->flags & AL_ETH_FLAG_RESET_REQUESTED) {
 		if (IS_ETH_V3_ADV(adapter->rev_id, adapter->dev_id)) {
 			rc = al_mod_eth_mac_tx_stop(adapter);
@@ -6197,7 +6621,9 @@ static int al_mod_eth_up(struct al_mod_eth_adapter *adapter)
 	if (adapter->board_type == ALPINE_NIC_V2_1G_TEST)
 		netif_carrier_on(adapter->netdev);
 #endif
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 	al_mod_eth_mdio_unlock(adapter->mdio_bus);
+#endif
 	return rc;
 
 err_req_irq:
@@ -6219,7 +6645,9 @@ err_setup_int:
 err_hw_init_open:
 	al_mod_eth_function_reset(adapter);
 err_mac_tx_stop:
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 	al_mod_eth_mdio_unlock(adapter->mdio_bus);
+#endif
 	return rc;
 }
 
@@ -7426,7 +7854,12 @@ static int al_mod_eth_open(struct net_device *netdev)
 		return rc;
 
 #ifdef CONFIG_ARCH_ALPINE
+#ifndef CONFIG_ALPINE_MDIO_BUS_SHARING
+	if (adapter->use_lm)
+#endif
+	{
 		al_mod_eth_serdes_init(adapter);
+	}
 #endif
 
 	adapter->last_establish_failed = false;
@@ -7465,13 +7898,28 @@ static int al_mod_eth_open(struct net_device *netdev)
 			if (rc)
 				netdev_warn(adapter->netdev, "failed to register PHY fixup\n");
 		}
+#ifndef CONFIG_ALPINE_MDIO_BUS_SHARING
+#ifdef CONFIG_PHYLIB
+		rc = al_mod_eth_mdiobus_setup(adapter);
+		if (rc) {
+			netdev_err(netdev, "failed at mdiobus setup!\n");
+			al_mod_eth_down(adapter);
+			return rc;
+		}
+#endif
+#endif
 	}
 
 #ifdef CONFIG_PHYLIB
 	if (adapter->mdio_bus) {
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 		/* Bring the PHY up */
 		phy_start(adapter->phydev);
 		return 0;
+#else
+		rc = al_mod_eth_phy_init(adapter);
+		return rc;
+#endif
 	}
 #endif
 
@@ -7571,6 +8019,11 @@ static int al_mod_eth_close(struct net_device *netdev)
 	if (adapter->phydev) {
 		/* Bring the PHY down */
 		phy_stop(adapter->phydev);
+#ifndef CONFIG_ALPINE_MDIO_BUS_SHARING
+		phy_disconnect(adapter->phydev);
+		adapter->phydev = NULL;
+		al_mod_eth_mdiobus_teardown(adapter);
+#endif
 	}
 #endif
 
@@ -7651,7 +8104,7 @@ al_mod_eth_set_link_ksettings(struct net_device *netdev,
 	if (adapter->use_lm) {
 		lm_link_config.autoneg = adapter->link_config.autoneg;
 		lm_link_config.duplex = adapter->link_config.active_duplex;
-		lm_link_config.speed = (adapter->link_config.autoneg) ? 0 : adapter->link_config.active_speed;
+		lm_link_config.speed = adapter->link_config.active_speed;
 		/* re-apply configuration on the fly */
 		return al_mod_eth_group_lm_link_conf_apply(group_lm_context, &lm_link_config);
 	} else {
@@ -7723,7 +8176,7 @@ al_mod_eth_set_settings(struct net_device *netdev, struct ethtool_cmd *ecmd)
 		struct al_mod_eth_lm_link_config lm_link_config = {0};
 		lm_link_config.autoneg = adapter->link_config.autoneg;
 		lm_link_config.duplex = adapter->link_config.active_duplex;
-		lm_link_config.speed = (adapter->link_config.autoneg) ? 0 : adapter->link_config.active_speed;
+		lm_link_config.speed = adapter->link_config.active_speed;
 		/* re-apply configuration on the fly */
 		return al_mod_eth_group_lm_link_conf_apply(group_lm_context, &lm_link_config);
 	} else {
@@ -8702,6 +9155,12 @@ al_mod_eth_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	int rc;
 
 	netdev_dbg(adapter->netdev, "%s skb %p\n", __func__, skb);
+
+	if (!adapter->up) {
+		netdev_dbg(adapter->netdev, "ignore skb when adapter is not up!\n");
+		dev_kfree_skb(skb);
+		return NETDEV_TX_OK;
+	}
 	/*  Determine which tx ring we will be placed on */
 	qid = skb_get_queue_mapping(skb);
 	tx_ring = &adapter->tx_ring[qid];
@@ -9445,6 +9904,7 @@ al_mod_eth_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	adapter->link_poll_interval = AL_ETH_DEFAULT_LINK_POLL_INTERVAL;
 	adapter->max_rx_buff_alloc_size = AL_ETH_DEFAULT_MAX_RX_BUFF_ALLOC_SIZE;
 	adapter->link_config.force_1000_base_x = AL_ETH_DEFAULT_FORCE_1000_BASEX;
+	adapter->link_config.autoneg = AUTONEG_ENABLE;
 
 	adapter->queue_steer_id = -1;
 
@@ -9760,6 +10220,7 @@ al_mod_eth_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 #endif
 
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 	/* Init MAC MDIO - needed by al_mod_eth_mdiobus_setup */
 	rc = al_mod_eth_mdiobus_hw_init(adapter);
 	if(rc) {
@@ -9772,6 +10233,7 @@ al_mod_eth_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		netdev_err(netdev, "failed at mdiobus setup!\n");
 		goto err_sysfs;
 	}
+#endif
 
 	return 0;
 
@@ -9817,6 +10279,7 @@ al_mod_eth_remove(struct pci_dev *pdev)
 	mutex_destroy(&adapter->lm_context.lock);
 #endif
 
+#ifdef CONFIG_ALPINE_MDIO_BUS_SHARING
 #ifdef CONFIG_PHYLIB
 	/** Stop PHY */
 	if (adapter->phydev) {
@@ -9825,6 +10288,7 @@ al_mod_eth_remove(struct pci_dev *pdev)
 	}
 #endif
 	al_mod_eth_mdiobus_teardown(adapter);
+#endif
 
 	unregister_netdev(dev);
 

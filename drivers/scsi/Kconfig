@@ -94,12 +94,21 @@ config BLK_DEV_SD
 	  In this case, do not compile the driver for your SCSI host adapter
 	  (below) as a module either.
 
+config UBNT_FIXED_SD_NAME
+	bool "make scsi device name stable w.r.t. its location"
+	depends on SCSI
+	---help---
+	   This option map ubnt nas hardware to software world. Which give scsi
+	   device name according to its location.
+	   Aimed at DebBox. 
+
 config SCSI_UBNT_STATIC_BOOT_DEV
 	bool "UBNT static boot flash name"
-	depends on BLK_DEV_SD
+	depends on BLK_DEV_SD && !UBNT_FIXED_SD_NAME
 	---help---
 	  When the SCSI host type is an usb storage and the vendor name is "Generic ",
 	  this option will name a static disk name (/dev/boot) for that device.
+	  Aimed at UbiOS.
 
 config CHR_DEV_ST
 	tristate "SCSI tape support"

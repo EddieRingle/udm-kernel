@@ -24,11 +24,25 @@
 #define PHY_ID_AQR106	0x03a1b4d0
 #define PHY_ID_AQR107	0x03a1b4e0
 #define PHY_ID_AQR405	0x03a1b4b0
+#define PHY_ID_AQR112	0x03a1b792
 
 #define PHY_AQUANTIA_FEATURES	(SUPPORTED_10000baseT_Full | \
 				 SUPPORTED_1000baseT_Full | \
 				 SUPPORTED_100baseT_Full | \
 				 PHY_DEFAULT_FEATURES)
+
+static int aquantia_config_init(struct phy_device *phydev)
+{
+	switch (phydev->interface) {
+	case PHY_INTERFACE_MODE_SGMII:
+	case PHY_INTERFACE_MODE_2500BASEX:
+	case PHY_INTERFACE_MODE_10GBASER:
+		break;
+	default:
+		return -ENODEV;
+	}
+	return 0;
+}
 
 static int aquantia_config_aneg(struct phy_device *phydev)
 {
@@ -183,6 +197,19 @@ static struct phy_driver aquantia_driver[] = {
 	.ack_interrupt	= aquantia_ack_interrupt,
 	.read_status	= aquantia_read_status,
 },
+{
+	.phy_id		= PHY_ID_AQR112,
+	.phy_id_mask	= 0xfffffff0,
+	.name		= "Aquantia AQR4112",
+	.features	= PHY_AQUANTIA_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
+	.aneg_done	= genphy_c45_aneg_done,
+	.config_init	= aquantia_config_init,
+	.config_aneg    = aquantia_config_aneg,
+	.config_intr	= aquantia_config_intr,
+	.ack_interrupt	= aquantia_ack_interrupt,
+	.read_status	= aquantia_read_status,
+},
 };
 
 module_phy_driver(aquantia_driver);
@@ -194,6 +221,7 @@ static struct mdio_device_id __maybe_unused aquantia_tbl[] = {
 	{ PHY_ID_AQR106, 0xfffffff0 },
 	{ PHY_ID_AQR107, 0xfffffff0 },
 	{ PHY_ID_AQR405, 0xfffffff0 },
+	{ PHY_ID_AQR112, 0xfffffff0 },
 	{ }
 };
 
